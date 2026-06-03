@@ -1,0 +1,9 @@
+streamlit
+google-genai
+supabase
+pypdf
+matplotlib
+numpy
+python-docx
+pytz
+Pillow

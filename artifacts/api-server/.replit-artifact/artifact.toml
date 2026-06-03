@@ -1,0 +1,21 @@
+kind = "api"
+previewPath = "/"
+title = "API Server"
+version = "1.0.0"
+id = "3B4_FFSkEVBkAeYMFRJ2e"
+
+[[services]]
+localPort = 8000
+name = "API Server"
+paths = ["/"]
+
+[services.development]
+run = "pnpm --filter @workspace/api-server run dev"
+
+[services.production]
+
+[services.production.run]
+args = ["streamlit", "run", "main.py", "--server.port=8000", "--server.address=0.0.0.0", "--server.enableCORS=false", "--server.enableXsrfProtection=false"]
+
+[services.production.health.startup]
+path = "/"
