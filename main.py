@@ -126,25 +126,25 @@ def save_to_supabase(
 
     yr_short = year.replace("Year ", "Yr")
     db_topic = f"{clean_topic} ({yr_short}) Set {set_num}{dist_str}"
-    	# 1. Map the full level names to their short abbreviations
-	level_map = {
-    		"Advanced": "Adv",
-    		"Extension": "Ext1",
-    		"Extension 2": "Ext2",
-    		"Standard": "Std"
-	}
+    # 1. Map the full level names to their short abbreviations
+    level_map = {
+        "Advanced": "Adv",
+        "Extension": "Ext1",
+        "Extension 2": "Ext2",
+        "Standard": "Std"
+    }
 
-	# 2. Translate the difficulty. If it's in our map, shorten it. If not, just use the original word.
-	short_diff = level_map.get(diff, diff) if diff else ""
+    # 2. Translate the difficulty. If it's in our map, shorten it. If not, just use the original word.
+    short_diff = level_map.get(diff, diff) if diff else ""
 
-	# 3. Create a clean level string (e.g., " Adv")
-	lvl_text = f" {short_diff}" if short_diff else ""
+    # 3. Create a clean level string (e.g., " Adv")
+    lvl_text = f" {short_diff}" if short_diff else ""
 
-	# 4. Keep spaces in the topic name, but remove slashes so the file saves safely
-	safe_topic = clean_topic.replace("/", "-").replace("\\", "-")
+    # 4. Keep spaces in the topic name, but remove slashes so the file saves safely
+    safe_topic = clean_topic.replace("/", "-").replace("\\", "-")
 
-	# 5. Build the beautiful new filename using the variables that already exist!
-	file_base = f"{yr_short} {subject}{lvl_text} {safe_topic} Set {set_num}{dist_str}"
+    # 5. Build the beautiful new filename using the variables that already exist!
+    file_base = f"{yr_short} {subject}{lvl_text} {safe_topic} Set {set_num}{dist_str}"
     pdf_path = f"{subject}/{year}/{file_base}.pdf"
     docx_path = f"{subject}/{year}/{file_base}.docx"
 
