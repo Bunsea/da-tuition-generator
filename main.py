@@ -603,6 +603,8 @@ def build_latex_pdf(
 \\usepackage{{graphicx}}
 \\usepackage{{tikz}}
 \\usetikzlibrary{{arrows.meta, positioning, calc, shapes.geometric}}
+\\usepackage{{pgfplots}}
+\\pgfplotsset{{compat=1.18}}
 \\pagestyle{{fancy}}
 \\fancyhead[L]{{\\textbf{{{safe_title}}}}}
 \\fancyhead[R]{{\\textit{{DA Tuition}}}}
@@ -1248,7 +1250,10 @@ GRAPH_END
 ENGINE 2: NATIVE TikZ
 Use this strictly for structural geometry: Networks, Critical Paths, 3D Trig diagrams, 3D Vectors, and Forces/Inclined Planes. The compiler has `\\usepackage{{tikz}}` installed (do NOT use pgfplots). Inject your `\\begin{{tikzpicture}}` code directly into the LaTeX output.
 
-CRITICAL GRAPH RULE: For any question involving geometry, graphs, or visual contexts, you MUST provide the generated Python or TikZ diagram code inside the QUESTION (if the student needs to see it to solve the problem), and you MUST ALWAYS provide the actual visual graph/diagram in the FULLY WORKED SOLUTIONS section. Do not rely solely on text descriptions. When drawing grids in TikZ, NEVER use undefined shorthand commands like \\grid. You must use standard TikZ path syntax, for example: \\draw[step=1cm, gray, very thin] (0,0) grid (5,5);
+CRITICAL GRAPHING REQUIREMENT:
+Whenever a question asks the student to "sketch" or "draw" a graph, you MUST provide the actual rendered graph in the Solutions and Answers sections using the LaTeX `pgfplots` package. 
+- You must code the visual plot using \begin{tikzpicture} \begin{axis}[...] ... \end{axis} \end{tikzpicture}. 
+- NEVER just describe the graph in text. You must mathematically plot the curves, asymptotes, and intercepts using pgfplots.
 
 {custom_instructions_block}
 OUTPUT EXACTLY LIKE THIS TEMPLATE:
@@ -1563,7 +1568,7 @@ if st.session_state.questions_text:
     else:
         b64 = base64.b64encode(st.session_state.pdf_bytes).decode("utf-8")
         st.markdown(
-            f'<iframe src="data:application/pdf;base64,{b64}" width="100%" height="800px"></iframe>',
+            f'<embed src="data:application/pdf;base64,{b64}" width="100%" height="850" type="application/pdf">',
             unsafe_allow_html=True,
         )
 
