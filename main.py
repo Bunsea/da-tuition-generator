@@ -1254,6 +1254,7 @@ CRITICAL GRAPHING REQUIREMENT:
 Whenever a question asks the student to "sketch" or "draw" a graph, you MUST provide the actual rendered graph in the Solutions and Answers sections using the LaTeX `pgfplots` package. 
 - You must code the visual plot using \begin{{tikzpicture}} \begin{{axis}}[...] ... \end{{axis}} \end{{tikzpicture}}. 
 - NEVER just describe the graph in text. You must mathematically plot the curves, asymptotes, and intercepts using pgfplots.
+- NEVER use the setting `trig format plots=none` in your axis options. It does not exist and will crash the compiler. If plotting trigonometric functions, use `trig format plots=rad` or omit the setting entirely.
 
 {custom_instructions_block}
 OUTPUT EXACTLY LIKE THIS TEMPLATE:
