@@ -1252,7 +1252,7 @@ Use this strictly for structural geometry: Networks, Critical Paths, 3D Trig dia
 
 CRITICAL GRAPHING REQUIREMENT:
 Whenever a question asks the student to "sketch" or "draw" a graph, you MUST provide the actual rendered graph in the Solutions and Answers sections using the LaTeX `pgfplots` package. 
-- You must code the visual plot using \begin{tikzpicture} \begin{axis}[...] ... \end{axis} \end{tikzpicture}. 
+- You must code the visual plot using \begin{{tikzpicture}} \begin{{axis}}[...] ... \end{{axis}} \end{{tikzpicture}}. 
 - NEVER just describe the graph in text. You must mathematically plot the curves, asymptotes, and intercepts using pgfplots.
 
 {custom_instructions_block}
