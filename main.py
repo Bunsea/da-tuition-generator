@@ -1255,6 +1255,7 @@ Whenever a question asks the student to "sketch" or "draw" a graph, you MUST pro
 - You must code the visual plot using \begin{{tikzpicture}} \begin{{axis}}[...] ... \end{{axis}} \end{{tikzpicture}}. 
 - NEVER just describe the graph in text. You must mathematically plot the curves, asymptotes, and intercepts using pgfplots.
 - NEVER use the setting `trig format plots=none` in your axis options. It does not exist and will crash the compiler. If plotting trigonometric functions, use `trig format plots=rad` or omit the setting entirely.
+- PREVENT DIMENSION ERRORS: When plotting rational functions or graphs with vertical asymptotes, you MUST restrict the vertical plotting domain to prevent "Dimension too large" LaTeX crashes. You must include `ymin=-10, ymax=10` (or appropriate limits) inside the \begin{axis}[...] options, AND you must include `restrict y to domain=-15:15` inside the \addplot[...] options to safely clip the asymptotes.
 
 {custom_instructions_block}
 OUTPUT EXACTLY LIKE THIS TEMPLATE:
