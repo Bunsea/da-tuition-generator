@@ -1568,7 +1568,12 @@ if st.session_state.questions_text:
     else:
         b64 = base64.b64encode(st.session_state.pdf_bytes).decode("utf-8")
         st.markdown(
-            f'<embed src="data:application/pdf;base64,{b64}" width="100%" height="850" type="application/pdf">',
+            f'<object data="data:application/pdf;base64,{b64}" type="application/pdf" width="100%" height="850px">'
+            f'<div style="text-align: center; padding: 50px; background-color: #f0f2f6; border-radius: 10px;">'
+            f'<h3>Preview Blocked by Browser</h3>'
+            f'<p>This exam contains high-resolution graphs that are too large for your browser to preview directly.</p>'
+            f'<p><b>Please scroll down and click "Download PDF" to view your generated exam!</b></p>'
+            f'</div></object>',
             unsafe_allow_html=True,
         )
 
