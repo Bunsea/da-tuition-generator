@@ -153,6 +153,11 @@ def save_to_supabase(
             pdf_path, pdf_bytes, {"content-type": "application/pdf"}
         )
         pdf_url = supabase_client.storage.from_("exam-files").get_public_url(pdf_path)
+# Bypass the Base64 limit by using the live cloud link!
+        st.markdown(
+            f'<iframe src="{pdf_url}" width="100%" height="850px"></iframe>',
+            unsafe_allow_html=True,
+        )
 
         docx_url = ""
         if word_bytes:
@@ -1569,16 +1574,7 @@ if st.session_state.questions_text:
         with st.expander("🛠️ View Log"):
             st.code(st.session_state.compiler_log, language="text")
     else:
-        b64 = base64.b64encode(st.session_state.pdf_bytes).decode("utf-8")
-        st.markdown(
-            f'<object data="data:application/pdf;base64,{b64}" type="application/pdf" width="100%" height="850px">'
-            f'<div style="text-align: center; padding: 50px; background-color: #f0f2f6; border-radius: 10px;">'
-            f'<h3>Preview Blocked by Browser</h3>'
-            f'<p>This exam contains high-resolution graphs that are too large for your browser to preview directly.</p>'
-            f'<p><b>Please scroll down and click "Download PDF" to view your generated exam!</b></p>'
-            f'</div></object>',
-            unsafe_allow_html=True,
-        )
+        pass
 
     yr_short = _y.replace("Year ", "Yr")
     lvl_part = f" Level ({_d})" if _d else ""
