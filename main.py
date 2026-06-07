@@ -1572,15 +1572,31 @@ if st.session_state.questions_text:
             st.code(st.session_state.compiler_log, language="text")
     else:
         b64 = base64.b64encode(st.session_state.pdf_bytes).decode("utf-8")
-        st.markdown(
-            f'<object data="data:application/pdf;base64,{b64}" type="application/pdf" width="100%" height="850px">'
-            f'<div style="text-align: center; padding: 50px; background-color: #f0f2f6; border-radius: 10px;">'
-            f'<h3>Preview Blocked by Browser</h3>'
-            f'<p>This exam contains high-resolution graphs that are too large for your browser to preview directly.</p>'
-            f'<p><b>Please scroll down and click "Download PDF" to view your generated exam!</b></p>'
-            f'</div></object>',
-            unsafe_allow_html=True,
-        )
+        
+        # The "Blob URL" trick to completely bypass Chrome's 2MB size limit
+        js_pdf_code = f"""
+        <script>
+            let pdf_base64 = "{b64}";
+            let byteCharacters = atob(pdf_base64);
+            let byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {{
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }}
+            let byteArray = new Uint8Array(byteNumbers);
+            let blob = new Blob([byteArray], {{type: "application/pdf"}});
+            let blobUrl = URL.createObjectURL(blob);
+            
+            let iframe = document.createElement("iframe");
+            iframe.src = blobUrl;
+            iframe.width = "100%";
+            iframe.height = "850px";
+            iframe.style.border = "none";
+            document.body.appendChild(iframe);
+        </script>
+        """
+        
+        import streamlit.components.v1 as components
+        components.html(js_pdf_code, height=860)
 
     yr_short = _y.replace("Year ", "Yr")
     lvl_part = f" Level ({_d})" if _d else ""
