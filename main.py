@@ -153,11 +153,7 @@ def save_to_supabase(
             pdf_path, pdf_bytes, {"content-type": "application/pdf"}
         )
         pdf_url = supabase_client.storage.from_("exam-files").get_public_url(pdf_path)
-# Bypass the Base64 limit by using the live cloud link!
-        st.markdown(
-            f'<iframe src="{pdf_url}" width="100%" height="850px"></iframe>',
-            unsafe_allow_html=True,
-        )
+
 
         docx_url = ""
         if word_bytes:
@@ -1262,6 +1258,7 @@ Whenever a question asks the student to "sketch" or "draw" a graph, you MUST pro
 - NEVER use the setting `trig format plots=none` in your axis options. It does not exist and will crash the compiler. If plotting trigonometric functions, use `trig format plots=rad` or omit the setting entirely.
 - PREVENT DIMENSION ERRORS: When plotting rational functions or graphs with vertical asymptotes, you MUST restrict the vertical plotting domain to prevent "Dimension too large" LaTeX crashes. You must include `ymin=-10, ymax=10` (or appropriate limits) inside the \begin{{axis}}[...] options, AND you must include `restrict y to domain=-15:15` inside the \addplot[...] options to safely clip the asymptotes.
 - MANDATORY SEMICOLONS: Every single drawing command inside the axis environment (such as \addplot, \draw, \node, \coordinate) MUST end with a semicolon (;). Do not forget the semicolon, or the LaTeX compiler will crash.
+- MANDATORY GEOMETRY DIAGRAMS: For any trigonometry, geometry, or bearing word problems in the Solutions section, you MUST draw a clear, labeled diagram using standard TikZ (e.g., \begin{{tikzpicture}} \draw ... \end{{tikzpicture}} without the axis environment). You must visually label all known lengths, angles, compass directions, and vertices (e.g., A, B, C) to help students understand the spatial setup.
 
 {custom_instructions_block}
 OUTPUT EXACTLY LIKE THIS TEMPLATE:
@@ -1574,7 +1571,16 @@ if st.session_state.questions_text:
         with st.expander("🛠️ View Log"):
             st.code(st.session_state.compiler_log, language="text")
     else:
-        pass
+        b64 = base64.b64encode(st.session_state.pdf_bytes).decode("utf-8")
+        st.markdown(
+            f'<object data="data:application/pdf;base64,{b64}" type="application/pdf" width="100%" height="850px">'
+            f'<div style="text-align: center; padding: 50px; background-color: #f0f2f6; border-radius: 10px;">'
+            f'<h3>Preview Blocked by Browser</h3>'
+            f'<p>This exam contains high-resolution graphs that are too large for your browser to preview directly.</p>'
+            f'<p><b>Please scroll down and click "Download PDF" to view your generated exam!</b></p>'
+            f'</div></object>',
+            unsafe_allow_html=True,
+        )
 
     yr_short = _y.replace("Year ", "Yr")
     lvl_part = f" Level ({_d})" if _d else ""
