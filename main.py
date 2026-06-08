@@ -938,6 +938,12 @@ with c5:
         "Specific Sub-topic (Optional)", placeholder="e.g. Slope Fields"
     )
 
+# ---> NEW: Add the copy-paste box directly underneath the topic row <---
+exemplar_questions = st.text_area(
+    "🧬 Question Cloner (Optional Text Input)", 
+    placeholder="Paste specific questions here. The AI will generate variations matching their exact style and difficulty!"
+)
+
 # ---> NEW: Add Photo Upload Option Here <---
 st.markdown("##### 📸 Or, Upload an Exam Notification / Worksheet Photo")
 uploaded_photo = st.file_uploader(
@@ -1232,6 +1238,7 @@ EXAMINER RULES:
 8. MULTIPLE CHOICE: You MUST heavily randomize the correct answer options (A, B, C, D) across the multiple-choice section. The correct answer must NOT always be 'A'.
 9. TOKEN ECONOMY: Keep all "FULLY WORKED SOLUTIONS" as brief and mathematically concise as possible. Do not write paragraphs of text if a single equation suffices.
 10. QUALITY CONTROL (CRITICAL): NEVER generate an empty `\\item`. Every single `\\item` MUST contain text. You must perfectly sync the question numbers, answer numbers, and solution numbers.
+11. UNIFIED QUESTION CLONING RULE (CRITICAL): If the user provides text inside [CLONE EXEMPLARS] or attaches an image/PDF file, your primary objective shifts to reverse-engineering those target items. Analyze their mathematical mechanics, formatting phrasing, structural complexity, and cognitive depth. You MUST generate original, highly precise variations that test the exact same competency tier. Change numeric values, algebraic configurations, or contextual word scenarios so the output operates as a perfect parallel practice set. Do not clone formatting errors or unrelated headers.
 {syllabus_ban}
 {auto_name_rule}
 
@@ -1324,24 +1331,24 @@ OUTPUT EXACTLY LIKE THIS TEMPLATE:
                             tools=[types.Tool(google_search=types.GoogleSearch())]
                         )
 
-                    # ---> NEW: Multimodal Payload Builder <---
-                    ai_payload = [prompt]
+                    # ---> UPGRADED: Dual Payload Builder <---
+        ai_payload = [prompt]
 
-                    if uploaded_photo is not None:
-                        # Check if the file is a PDF
-                        if uploaded_photo.name.lower().endswith(".pdf"):
-                            # Rip the text out using the PdfReader you already imported
-                            reader = PdfReader(uploaded_photo)
-                            pdf_text = "\n".join(
-                                [page.extract_text() or "" for page in reader.pages]
-                            )
-                            ai_payload.append(
-                                f"\n\n[ATTACHED PDF DOCUMENT TEXT]:\n{pdf_text}"
-                            )
-                        else:
-                            # It's an image, process it normally with PIL
-                            img_data = Image.open(uploaded_photo)
-                            ai_payload.append(img_data)
+        # 1. Catch text-based copy-pasted questions
+        if exemplar_questions.strip():
+            ai_payload.append(f"\n\n[CLONE EXEMPLARS - TEXT INPUT]:\n{exemplar_questions}")
+
+        # 2. Catch file/photo uploads (Your existing logic)
+        if uploaded_photo is not None:
+            if uploaded_photo.name.lower().endswith(".pdf"):
+                reader = PdfReader(uploaded_photo)
+                pdf_text = "\n".join(
+                    [page.extract_text() or "" for page in reader.pages]
+                )
+                ai_payload.append(f"\n\n[CLONE EXEMPLARS - ATTACHED PDF TEXT]:\n{pdf_text}")
+            else:
+                img_data = Image.open(uploaded_photo)
+                ai_payload.append(img_data)
 
                         # Inject a contextual instruction telling the AI to read the attachment
                         ai_payload.append(
