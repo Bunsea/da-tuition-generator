@@ -1119,6 +1119,12 @@ if generate_btn:
         clean_topic = ", ".join(
             [re.sub(r"^\d+[\.\-]\s*", "", t).strip() for t in topic_list]
         )
+        
+        # ---> NEW: Safely append the sub-topic to the main topic string <---
+        if sub_topic:
+            safe_sub = sub_topic.replace("/", "-").replace("\\", "-")
+            clean_topic = f"{clean_topic} - {safe_sub}"
+            
         grades_string = ", ".join(year_group)
 
         current_set_number = get_next_set_number(
@@ -1474,6 +1480,17 @@ OUTPUT EXACTLY LIKE THIS TEMPLATE:
                 marks,
                 int(marks * 1.5),
             )
+	    
+            preview_url = ""
+            if p_bytes and supabase_client:
+                try:
+                    preview_path = f"previews/temp_preview_{int(time.time())}.pdf"
+                    supabase_client.storage.from_("exam-files").upload(
+                        preview_path, p_bytes, {"content-type": "application/pdf"}
+                    )
+                    preview_url = supabase_client.storage.from_("exam-files").get_public_url(preview_path)
+                except Exception:
+                    pass
 
             st.session_state.update(
                 {
@@ -1483,6 +1500,7 @@ OUTPUT EXACTLY LIKE THIS TEMPLATE:
                     "pdf_bytes": p_bytes,
                     "tex_bytes": t_bytes,
                     "word_bytes": w_bytes,
+                    "preview_url": preview_url,
                     "compiler_log": log,
                     "meta_topic": clean_topic,
                     "meta_subject": subject,
@@ -1571,36 +1589,37 @@ if st.session_state.questions_text:
         with st.expander("🛠️ View Log"):
             st.code(st.session_state.compiler_log, language="text")
     else:
-        b64 = base64.b64encode(st.session_state.pdf_bytes).decode("utf-8")
-        
-        # The "Blob URL" trick to completely bypass Chrome's 2MB size limit
-        js_pdf_code = f"""
-        <script>
-            let pdf_base64 = "{b64}";
-            let byteCharacters = atob(pdf_base64);
-            let byteNumbers = new Array(byteCharacters.length);
-            for (let i = 0; i < byteCharacters.length; i++) {{
-                byteNumbers[i] = byteCharacters.charCodeAt(i);
-            }}
-            let byteArray = new Uint8Array(byteNumbers);
-            let blob = new Blob([byteArray], {{type: "application/pdf"}});
-            let blobUrl = URL.createObjectURL(blob);
-            
-            let iframe = document.createElement("iframe");
-            iframe.src = blobUrl;
-            iframe.width = "100%";
-            iframe.height = "850px";
-            iframe.style.border = "none";
-            document.body.appendChild(iframe);
-        </script>
-        """
-        
-        import streamlit.components.v1 as components
-        components.html(js_pdf_code, height=860)
+        # If we successfully grabbed a background preview URL, use it!
+        if st.session_state.get("preview_url"):
+            st.markdown(
+                f'<iframe src="{st.session_state.preview_url}" width="100%" height="850px"></iframe>',
+                unsafe_allow_html=True,
+            )
+        else:
+            # The Ultimate Safe Fallback
+            b64 = base64.b64encode(st.session_state.pdf_bytes).decode("utf-8")
+            st.markdown(
+                f'<object data="data:application/pdf;base64,{b64}" type="application/pdf" width="100%" height="850px">'
+                f'<div style="text-align: center; padding: 50px; background-color: #f0f2f6; border-radius: 10px;">'
+                f'<h3>Preview Blocked by Browser</h3>'
+                f'<p>This exam contains high-resolution graphs that are too large for your browser to preview directly.</p>'
+                f'<p><b>Please scroll down and click "Download PDF" to view your generated exam!</b></p>'
+                f'</div></object>',
+                unsafe_allow_html=True,
+            )
+
+    # Build the distribution string for the local download filename
+    dist_parts = []
+    if st.session_state.meta_mc: dist_parts.append(f"{st.session_state.meta_mc} MC")
+    if st.session_state.meta_easy: dist_parts.append(f"{st.session_state.meta_easy} Easy")
+    if st.session_state.meta_med: dist_parts.append(f"{st.session_state.meta_med} Med")
+    if st.session_state.meta_hard: dist_parts.append(f"{st.session_state.meta_hard} Hard")
+    if st.session_state.meta_xh: dist_parts.append(f"{st.session_state.meta_xh} Ext Hard")
+    dist_str = f" ({', '.join(dist_parts)})" if dist_parts else ""
 
     yr_short = _y.replace("Year ", "Yr")
-    lvl_part = f" Level ({_d})" if _d else ""
-    safe_name = f"Grade ({yr_short}) Subject ({_s}){lvl_part} Topic ({_t.replace('/', '_')}) Set ({_set})"
+    lvl_part = f" {_d}" if _d else ""
+    safe_name = f"{yr_short} {_s}{lvl_part} {_t.replace('/', '_')} Set {_set}{dist_str}"
 
     dl1, dl2, dl3 = st.columns(3)
     with dl1:
