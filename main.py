@@ -1480,17 +1480,6 @@ OUTPUT EXACTLY LIKE THIS TEMPLATE:
                 marks,
                 int(marks * 1.5),
             )
-	    
-            preview_url = ""
-            if p_bytes and supabase_client:
-                try:
-                    preview_path = f"previews/temp_preview_{int(time.time())}.pdf"
-                    supabase_client.storage.from_("exam-files").upload(
-                        preview_path, p_bytes, {"content-type": "application/pdf"}
-                    )
-                    preview_url = supabase_client.storage.from_("exam-files").get_public_url(preview_path)
-                except Exception:
-                    pass
 
             st.session_state.update(
                 {
@@ -1500,7 +1489,6 @@ OUTPUT EXACTLY LIKE THIS TEMPLATE:
                     "pdf_bytes": p_bytes,
                     "tex_bytes": t_bytes,
                     "word_bytes": w_bytes,
-                    "preview_url": preview_url,
                     "compiler_log": log,
                     "meta_topic": clean_topic,
                     "meta_subject": subject,
