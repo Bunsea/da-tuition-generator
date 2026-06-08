@@ -1576,25 +1576,57 @@ if st.session_state.questions_text:
         st.error("⚠️ **PDF Compiler Failed**")
         with st.expander("🛠️ View Log"):
             st.code(st.session_state.compiler_log, language="text")
+    if not st.session_state.pdf_bytes:
+        st.error("⚠️ **PDF Compiler Failed**")
+        with st.expander("🛠️ View Log"):
+            st.code(st.session_state.compiler_log, language="text")
     else:
-        # If we successfully grabbed a background preview URL, use it!
-        if st.session_state.get("preview_url"):
-            st.markdown(
-                f'<iframe src="{st.session_state.preview_url}" width="100%" height="850px"></iframe>',
-                unsafe_allow_html=True,
-            )
-        else:
-            # The Ultimate Safe Fallback
-            b64 = base64.b64encode(st.session_state.pdf_bytes).decode("utf-8")
-            st.markdown(
-                f'<object data="data:application/pdf;base64,{b64}" type="application/pdf" width="100%" height="850px">'
-                f'<div style="text-align: center; padding: 50px; background-color: #f0f2f6; border-radius: 10px;">'
-                f'<h3>Preview Blocked by Browser</h3>'
-                f'<p>This exam contains high-resolution graphs that are too large for your browser to preview directly.</p>'
-                f'<p><b>Please scroll down and click "Download PDF" to view your generated exam!</b></p>'
-                f'</div></object>',
-                unsafe_allow_html=True,
-            )
+        # High-performance PDF parsing engine using HTML5 canvas rendering
+        b64 = base64.b64encode(st.session_state.pdf_bytes).decode("utf-8")
+        
+        canvas_preview_html = f"""
+        <div id="pdf-container" style="height: 830px; overflow-y: auto; background-color: #525659; padding: 20px; border-radius: 8px; border: 1px solid #ccc;"></div>
+        
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+        <script>
+            const pdfData = atob("{b64}");
+            const pdfjsLib = window['pdfjs-dist/build/pdf'];
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+            const loadingTask = pdfjsLib.getDocument({{data: pdfData}});
+            loadingTask.promise.then(pdf => {{
+                const container = document.getElementById('pdf-container');
+                const canvases = [];
+                
+                for (let i = 1; i <= pdf.numPages; i++) {{
+                    const canvas = document.createElement('canvas');
+                    canvas.style.display = 'block';
+                    canvas.style.margin = '0 auto 20px auto';
+                    canvas.style.backgroundColor = '#ffffff';
+                    canvas.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
+                    container.appendChild(canvas);
+                    canvases.push(canvas);
+                }}
+                
+                for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {{
+                    pdf.getPage(pageNum).then(page => {{
+                        const scale = 1.3;
+                        const viewport = page.getViewport({{scale: scale}});
+                        const canvas = canvases[pageNum - 1];
+                        canvas.height = viewport.height;
+                        canvas.width = viewport.width;
+                        
+                        const context = canvas.getContext('2d');
+                        page.render({{canvasContext: context, viewport: viewport}});
+                    }});
+                }}
+            }}).catch(err => {{
+                document.getElementById('pdf-container').innerHTML = '<div style="color:white; text-align:center; padding-top:40px;">Rendering Preview Failed. Please use the download link below.</div>';
+            }});
+        </script>
+        """
+        import streamlit.components.v1 as components
+        components.html(canvas_preview_html, height=850)
 
     # Build the distribution string for the local download filename
     dist_parts = []
