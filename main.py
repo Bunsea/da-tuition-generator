@@ -1265,6 +1265,7 @@ Whenever a question asks the student to "sketch" or "draw" a graph, you MUST pro
 - PREVENT DIMENSION ERRORS: When plotting rational functions or graphs with vertical asymptotes, you MUST restrict the vertical plotting domain to prevent "Dimension too large" LaTeX crashes. You must include `ymin=-10, ymax=10` (or appropriate limits) inside the \begin{{axis}}[...] options, AND you must include `restrict y to domain=-15:15` inside the \addplot[...] options to safely clip the asymptotes.
 - MANDATORY SEMICOLONS: Every single drawing command inside the axis environment (such as \addplot, \draw, \node, \coordinate) MUST end with a semicolon (;). Do not forget the semicolon, or the LaTeX compiler will crash.
 - MANDATORY GEOMETRY DIAGRAMS: For any trigonometry, geometry, or bearing word problems in the Solutions section, you MUST draw a clear, labeled diagram using standard TikZ (e.g., \begin{{tikzpicture}} \draw ... \end{{tikzpicture}} without the axis environment). You must visually label all known lengths, angles, compass directions, and vertices (e.g., A, B, C) to help students understand the spatial setup.
+- TIKZ LABELS AND ANCHORS SECURING: When creating labels or polar positioning elements in TikZ, you MUST use explicit standard syntax (e.g., label=90:{$P_1$} or [above=of P_1]). NEVER use shorthand styles like [90:P_1] directly inside bracket options, as this will trigger a fatal pgfkeys compiler crash.
 
 {custom_instructions_block}
 OUTPUT EXACTLY LIKE THIS TEMPLATE:
