@@ -154,7 +154,6 @@ def save_to_supabase(
         )
         pdf_url = supabase_client.storage.from_("exam-files").get_public_url(pdf_path)
 
-
         docx_url = ""
         if word_bytes:
             supabase_client.storage.from_("exam-files").upload(
@@ -1332,23 +1331,23 @@ OUTPUT EXACTLY LIKE THIS TEMPLATE:
                         )
 
                     # ---> UPGRADED: Dual Payload Builder <---
-        ai_payload = [prompt]
+                    ai_payload = [prompt]
 
-        # 1. Catch text-based copy-pasted questions
-        if exemplar_questions.strip():
-            ai_payload.append(f"\n\n[CLONE EXEMPLARS - TEXT INPUT]:\n{exemplar_questions}")
+                    # 1. Catch text-based copy-pasted questions
+                    if exemplar_questions.strip():
+                        ai_payload.append(f"\n\n[CLONE EXEMPLARS - TEXT INPUT]:\n{exemplar_questions}")
 
-        # 2. Catch file/photo uploads (Your existing logic)
-        if uploaded_photo is not None:
-            if uploaded_photo.name.lower().endswith(".pdf"):
-                reader = PdfReader(uploaded_photo)
-                pdf_text = "\n".join(
-                    [page.extract_text() or "" for page in reader.pages]
-                )
-                ai_payload.append(f"\n\n[CLONE EXEMPLARS - ATTACHED PDF TEXT]:\n{pdf_text}")
-            else:
-                img_data = Image.open(uploaded_photo)
-                ai_payload.append(img_data)
+                    # 2. Catch file/photo uploads (Your existing logic)
+                    if uploaded_photo is not None:
+                        if uploaded_photo.name.lower().endswith(".pdf"):
+                            reader = PdfReader(uploaded_photo)
+                            pdf_text = "\n".join(
+                                [page.extract_text() or "" for page in reader.pages]
+                            )
+                            ai_payload.append(f"\n\n[CLONE EXEMPLARS - ATTACHED PDF TEXT]:\n{pdf_text}")
+                        else:
+                            img_data = Image.open(uploaded_photo)
+                            ai_payload.append(img_data)
 
                         # Inject a contextual instruction telling the AI to read the attachment
                         ai_payload.append(
@@ -1580,10 +1579,6 @@ if st.session_state.questions_text:
 
     st.markdown("---")
 
-    if not st.session_state.pdf_bytes:
-        st.error("⚠️ **PDF Compiler Failed**")
-        with st.expander("🛠️ View Log"):
-            st.code(st.session_state.compiler_log, language="text")
     if not st.session_state.pdf_bytes:
         st.error("⚠️ **PDF Compiler Failed**")
         with st.expander("🛠️ View Log"):
