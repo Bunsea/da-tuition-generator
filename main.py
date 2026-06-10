@@ -1360,7 +1360,7 @@ OUTPUT EXACTLY LIKE THIS TEMPLATE:
                     models_to_try = [
                         "gemini-3.5-flash",  # Tier 1: Blazing Fast (First Choice)
                         "gemini-3.1-pro-preview",  # Tier 2: Heavy Reasoning (Backup)
-                        "gemini-3.0-pro",  # Tier 3: Stable Bedrock (Ultimate Safety Net)
+                        "gemini-2.5-pro",  # Tier 3: Stable Bedrock (Ultimate Safety Net)
                     ]
 
                     response = None
