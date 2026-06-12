@@ -731,7 +731,7 @@ with col2:
         """
         <style>
         .massive-header {
-            font-size: 55px !important;
+            font-size: 38px !important;
             font-weight: 700 !important;
             color: #31333F !important;
             line-height: 1.2 !important;
