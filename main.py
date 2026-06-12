@@ -718,7 +718,7 @@ with col1:
     if os.path.exists(LOGO_PATH):
         st.image(LOGO_PATH)
 with col2:
-    st.markdown("## DA Tuition | NESA Question Generator")
+    st.markdown('<h1 class="landing-title">DA Tuition | NESA Question Generator</h1>', unsafe_allow_html=True)
 
 st.markdown("---")
 
