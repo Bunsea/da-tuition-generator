@@ -727,7 +727,7 @@ with col1:
     if os.path.exists(LOGO_PATH):
         st.image(LOGO_PATH)
 with col2:
-    st.markdown('<div style="font-size: 46px !important; font-weight: 600 !important; color: #31333F !important; margin: 0 !important; padding: 0 !important; line-height: 1.2;">DA Tuition | NESA Question Generator</div>', unsafe_allow_html=True)
+    st.markdown('<h1 style="font-size: 48px !important; font-weight: 600 !important; color: #31333F !important; margin-top: 0px !important; margin-bottom: 0px !important; padding: 0px !important; line-height: 1.2;">DA Tuition | NESA Question Generator</h1>', unsafe_allow_html=True)
 
 st.markdown("---")
 
