@@ -703,6 +703,15 @@ st.markdown(
         h3 { font-size: 1.8rem !important; font-weight: 600 !important; }
         h4 { font-size: 1.5rem !important; font-weight: 600 !important; }
         h5 { font-size: 1.3rem !important; font-weight: 600 !important; }
+
+	.landing-title {
+            font-size: 2.4rem !important;  
+            font-weight: 600 !important;   
+            color: #31333F !important;     
+            line-height: 1.3 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
         
         /* Adjust caption styling so helper text remains crisp but legible */
         .stCaption, caption, small {
@@ -718,7 +727,7 @@ with col1:
     if os.path.exists(LOGO_PATH):
         st.image(LOGO_PATH)
 with col2:
-    st.markdown('<h1 class="landing-title">DA Tuition | NESA Question Generator</h1>', unsafe_allow_html=True)
+    st.markdown('<h2 class="landing-title">DA Tuition | NESA Question Generator</h2>', unsafe_allow_html=True)
 
 st.markdown("---")
 
