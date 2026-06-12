@@ -681,8 +681,33 @@ st.set_page_config(
 st.markdown(
     """
     <style>
+        /* Base background color and custom header rules */
         .stApp { background-color: #EAF6FF; }
         [data-testid="stHeader"] { background-color: transparent; }
+        
+        /* Scale up all base body elements, labels, buttons, and text fields */
+        html, body, p, span, label, input, textarea, button, 
+        [data-testid="stWidgetLabel"] p, 
+        .stMarkdown p, 
+        .stButton button, 
+        div[role="listbox"], 
+        div[role="combobox"] span,
+        .stSelectbox div,
+        .stMultiSelect div {
+            font-size: 18px !important;
+        }
+        
+        /* Upscale headings proportionally so the hierarchy stays beautiful */
+        h1 { font-size: 2.6rem !important; font-weight: 700 !important; }
+        h2 { font-size: 2.2rem !important; font-weight: 700 !important; }
+        h3 { font-size: 1.8rem !important; font-weight: 600 !important; }
+        h4 { font-size: 1.5rem !important; font-weight: 600 !important; }
+        h5 { font-size: 1.3rem !important; font-weight: 600 !important; }
+        
+        /* Adjust caption styling so helper text remains crisp but legible */
+        .stCaption, caption, small {
+            font-size: 14px !important;
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -924,7 +949,12 @@ available_topics = []
 for y in year_group:
     p_path = get_parent_path(y, subject, actual_level)
     available_topics.extend(get_available_topics(p_path))
-available_topics = sorted(list(set(available_topics)))
+
+# Natural alphanumeric sort to keep 1, 2, 3... 10, 11 in correct order
+available_topics = sorted(
+    list(set(available_topics)),
+    key=lambda x: [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', x)]
+)
 
 c4, c5 = st.columns([2, 2])
 with c4:
