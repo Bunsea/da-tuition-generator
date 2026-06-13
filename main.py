@@ -704,15 +704,6 @@ st.markdown(
         h4 { font-size: 1.5rem !important; font-weight: 600 !important; }
         h5 { font-size: 1.3rem !important; font-weight: 600 !important; }
 
-	.landing-title {
-            font-size: 2.4rem !important;  
-            font-weight: 600 !important;   
-            color: #31333F !important;     
-            line-height: 1.3 !important;
-            margin: 0 !important;
-            padding: 0 !important;
-        }
-        
         /* Adjust caption styling so helper text remains crisp but legible */
         .stCaption, caption, small {
             font-size: 14px !important;
@@ -1128,6 +1119,7 @@ _SS_KEYS = (
     "meta_xh",
     "meta_input_tokens",
     "meta_output_tokens",
+    "meta_model_used",  # NEW: Tracks which model generated the exam
     "used_search",
 )
 for _key in _SS_KEYS:
@@ -1288,7 +1280,7 @@ EXAMINER RULES:
 6. CRITICAL LATEX FIX: The VERY FIRST command immediately after `\\begin{{enumerate}}` or `\\begin{{itemize}}` MUST be `\\item`. NEVER place introductory text, spacing commands, or any other characters between the begin environment and the first item. If you have an introduction, place it AFTER the `\\item`.
 7. SECTION TITLES: Name each section purely as "Section 1", "Section 2", etc. You MUST use the exact standard syntax `\\section*{{Section X}}`. NEVER invent undefined commands like `\\sectionsection`.
 8. MULTIPLE CHOICE: You MUST heavily randomize the correct answer options (A, B, C, D) across the multiple-choice section. The correct answer must NOT always be 'A'.
-9. BALANCED STEP-BY-STEP SOLUTION RIGOUR: Provide a cleanly structured, balanced step-by-step breakdown for every item in the "FULLY WORKED SOLUTIONS" section. Show the primary formula or theorem being applied, key algebraic substitutions, and essential structural transitions (such as factoring, applying core calculus rules, or trigonometric identities). Do not skip critical logical leaps, but do not bloat the space with trivial arithmetic or line-by-line basic computations. It must read as a clear, professional model answer that values conceptual layout over excessive text.
+9. TOKEN ECONOMY & STRICT MATHEMATICAL CONCISENESS: Output the absolute minimum text required for "FULLY WORKED SOLUTIONS". Show only the primary formula, key substitutions, and final evaluation. Completely eliminate conversational text, narrative explanations, and trivial arithmetic. Group multiple algebraic simplifications onto a single line. Your primary goal is to minimize total output tokens while keeping the logic mathematically sound.
 10. ABSOLUTE ANSWER CONSISTENCY (CRITICAL): You MUST perform a rigorous cross-check before finalizing output. Every standalone value, numeric calculation, coordinate intercept, or multiple-choice option letter (A, B, C, D) specified in the "ANSWERS" page MUST precisely match the final evaluated line calculated at the bottom of the "FULLY WORKED SOLUTIONS" section. Discrepancies between the answer key and the worked solutions are strictly forbidden.
 11. UNIFIED QUESTION CLONING RULE (CRITICAL): If the user provides text inside [CLONE EXEMPLARS] or attaches an image/PDF file, your primary objective shifts to reverse-engineering those target items. Analyze their mathematical mechanics, formatting phrasing, structural complexity, and cognitive depth. You MUST generate original, highly precise variations that test the exact same competency tier. Change numeric values, algebraic configurations, or contextual word scenarios so the output operates as a perfect parallel practice set. Do not clone formatting errors or unrelated headers.
 {syllabus_ban}
@@ -1374,14 +1366,14 @@ OUTPUT EXACTLY LIKE THIS TEMPLATE:
                         "Science",
                     ]
 
-                    # 2. Build the config tool safely using native SDK content wrapper classes
-                    gen_config = None
+                    # ---> NEW: Cost-Saving Token Limiter <---
+                    from google.genai import types
+                    config_kwargs = {"max_output_tokens": 5500}
+                    
                     if subject in live_search_subjects and use_live_search:
-                        from google.genai import types
-
-                        gen_config = types.GenerateContentConfig(
-                            tools=[types.Tool(google_search=types.GoogleSearch())]
-                        )
+                        config_kwargs["tools"] = [types.Tool(google_search=types.GoogleSearch())]
+                    
+                    gen_config = types.GenerateContentConfig(**config_kwargs)
 
                     # ---> UPGRADED: Dual Payload Builder <---
                     ai_payload = [prompt]
@@ -1411,7 +1403,7 @@ OUTPUT EXACTLY LIKE THIS TEMPLATE:
 
                     # 3. Call the AI with a Multi-Tiered Fallback Queue
                     models_to_try = [
-                        "gemini-3.5-flash",  # Tier 1: Blazing Fast (First Choice)
+                        "gemini-3.5-flash",  # Tier 1: Blazing Fast & Cheap (First Choice)
                         "gemini-3.1-pro-preview",  # Tier 2: Heavy Reasoning (Backup)
                         "gemini-2.5-pro",  # Tier 3: Stable Bedrock (Ultimate Safety Net)
                     ]
@@ -1426,6 +1418,9 @@ OUTPUT EXACTLY LIKE THIS TEMPLATE:
                                 contents=ai_payload,
                                 config=gen_config,
                             )
+                            # Log which model successfully won the job!
+                            st.toast(f"✅ Success! Engine used: {model_name}")
+                            st.session_state.meta_model_used = model_name
                             break  # Success! Break out of the fallback queue
                         except Exception as e:
                             last_error = e
@@ -1443,7 +1438,7 @@ OUTPUT EXACTLY LIKE THIS TEMPLATE:
                         raise last_error
                     out = response.text
 
-                    # 4. Token & Cost Tracking
+                    # 4. Token Tracking
                     if response.usage_metadata:
                         st.session_state.meta_input_tokens = (
                             response.usage_metadata.prompt_token_count
@@ -1451,7 +1446,7 @@ OUTPUT EXACTLY LIKE THIS TEMPLATE:
                         st.session_state.meta_output_tokens = (
                             response.usage_metadata.candidates_token_count
                         )
-                    st.session_state.used_search = gen_config is not None
+                    st.session_state.used_search = ("tools" in config_kwargs)
 
                     break  # If successful, break out of the loop
                 except Exception as e:
@@ -1587,12 +1582,22 @@ if st.session_state.questions_text:
     lvl_str = f" {_d}" if _d else ""
     st.markdown(f"### {_disp} ({_y}{lvl_str})")
 
-    # Calculate and display precise generation costs ONLY if Admin PIN is correct
+    # ---> NEW: Dynamic Pricing Calculator <---
     if st.session_state.get("admin_pin") == "DA_ADMIN":
         in_tok = st.session_state.meta_input_tokens or 0
         out_tok = st.session_state.meta_output_tokens or 0
-        in_cost = (in_tok / 1_000_000) * 1.50
-        out_cost = (out_tok / 1_000_000) * 9.00
+        model_used = st.session_state.meta_model_used or "Unknown"
+
+        # Determine true pricing based on the engine used
+        if "flash" in model_used.lower():
+            # Flash is approx $0.075 per 1M in / $0.30 per 1M out
+            in_cost = (in_tok / 1_000_000) * 0.075
+            out_cost = (out_tok / 1_000_000) * 0.30
+        else:
+            # Pro models are approx $1.50 per 1M in / $6.00 per 1M out
+            in_cost = (in_tok / 1_000_000) * 1.50
+            out_cost = (out_tok / 1_000_000) * 6.00
+
         search_cost = 0.014 if st.session_state.used_search else 0.00
         total_cost = in_cost + out_cost + search_cost
 
@@ -1602,7 +1607,7 @@ if st.session_state.questions_text:
             else ""
         )
         st.caption(
-            f"**💸 Generation Cost:** ${total_cost:.5f} &nbsp;&nbsp;|&nbsp;&nbsp; **Tokens:** {in_tok:,} In / {out_tok:,} Out{search_badge}"
+            f"**💸 True Generation Cost:** ${total_cost:.5f} &nbsp;&nbsp;|&nbsp;&nbsp; **Engine:** `{model_used}` &nbsp;&nbsp;|&nbsp;&nbsp; **Tokens:** {in_tok:,} In / {out_tok:,} Out{search_badge}"
         )
 
     if not st.session_state.cloud_saved:
