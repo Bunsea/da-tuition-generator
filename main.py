@@ -1451,7 +1451,7 @@ OUTPUT EXACTLY LIKE THIS TEMPLATE:
                         st.session_state.meta_output_tokens = (
                             response.usage_metadata.candidates_token_count
                         )
-                    st.session_state.used_search = ("tools" in config_kwargs)
+                    st.session_state.used_search = (subject in live_search_subjects and use_live_search)
 
                     break  # If successful, break out of the loop
                 except Exception as e:
