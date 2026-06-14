@@ -1281,7 +1281,7 @@ EXAMINER RULES:
 7. SECTION TITLES: Name each section purely as "Section 1", "Section 2", etc. You MUST use the exact standard syntax `\\section*{{Section X}}`. NEVER invent undefined commands like `\\sectionsection`.
 8. MULTIPLE CHOICE: You MUST heavily randomize the correct answer options (A, B, C, D) across the multiple-choice section. The correct answer must NOT always be 'A'.
 9. TOKEN ECONOMY & STRICT MATHEMATICAL CONCISENESS: Output the absolute minimum text required for "FULLY WORKED SOLUTIONS". Show only the primary formula, key substitutions, and final evaluation. Completely eliminate conversational text, narrative explanations, and trivial arithmetic. Group multiple algebraic simplifications onto a single line. Your primary goal is to minimize total output tokens while keeping the logic mathematically sound.
-10. ABSOLUTE ANSWER CONSISTENCY (CRITICAL): You MUST perform a rigorous cross-check before finalizing output. Every standalone value, numeric calculation, coordinate intercept, or multiple-choice option letter (A, B, C, D) specified in the "ANSWERS" page MUST precisely match the final evaluated line calculated at the bottom of the "FULLY WORKED SOLUTIONS" section. Discrepancies between the answer key and the worked solutions are strictly forbidden.
+10. PYTHON CALCULATOR SANDBOX (CRITICAL): You are equipped with a Python Code Execution tool. You MUST use it to calculate every single final decimal answer for financial mathematics, compound interest, annuities, or complex algebraic expressions. NEVER try to guess or hallucinate the final number. Write a Python script to evaluate the formula, run it, and inject the exact, calculated decimal into the "ANSWERS" and "FULLY WORKED SOLUTIONS" sections. CRITICAL EXCEPTION: DO NOT use the Python tool to solve Networks, Critical Path Analysis, Maximum Flow, or Geometry problems. Draw the TikZ diagrams and evaluate those structural networks purely using your internal reasoning.
 11. UNIFIED QUESTION CLONING RULE (CRITICAL): If the user provides text inside [CLONE EXEMPLARS] or attaches an image/PDF file, your primary objective shifts to reverse-engineering those target items. Analyze their mathematical mechanics, formatting phrasing, structural complexity, and cognitive depth. You MUST generate original, highly precise variations that test the exact same competency tier. Change numeric values, algebraic configurations, or contextual word scenarios so the output operates as a perfect parallel practice set. Do not clone formatting errors or unrelated headers.
 {syllabus_ban}
 {auto_name_rule}
@@ -1366,14 +1366,19 @@ OUTPUT EXACTLY LIKE THIS TEMPLATE:
                         "Science",
                     ]
 
-                    # ---> NEW: Cost-Saving Token Limiter <---
+                    # ---> NEW: Cost-Saving Token Limiter & PYTHON SANDBOX <---
                     from google.genai import types
-                    config_kwargs = {"max_output_tokens": 5500}
+                    
+                    # Initialize the tool list with the Python Code Execution sandbox!
+                    active_tools = [types.Tool(code_execution=types.ToolCodeExecution())]
                     
                     if subject in live_search_subjects and use_live_search:
-                        config_kwargs["tools"] = [types.Tool(google_search=types.GoogleSearch())]
+                        active_tools.append(types.Tool(google_search=types.GoogleSearch()))
                     
-                    gen_config = types.GenerateContentConfig(**config_kwargs)
+                    gen_config = types.GenerateContentConfig(
+                        max_output_tokens=8192,
+                        tools=active_tools
+                    )
 
                     # ---> UPGRADED: Dual Payload Builder <---
                     ai_payload = [prompt]
