@@ -1317,6 +1317,7 @@ Whenever a question asks the student to "sketch" or "draw" a graph, you MUST pro
 - MANDATORY SEMICOLONS: Every single drawing command inside the axis environment (such as \addplot, \draw, \node, \coordinate) MUST end with a semicolon (;). Do not forget the semicolon, or the LaTeX compiler will crash.
 - MANDATORY GEOMETRY DIAGRAMS: For any trigonometry, geometry, or bearing word problems in the Solutions section, you MUST draw a clear, labeled diagram using standard TikZ (e.g., \begin{{tikzpicture}} \draw ... \end{{tikzpicture}} without the axis environment). You must visually label all known lengths, angles, compass directions, and vertices (e.g., A, B, C) to help students understand the spatial setup.
 - TIKZ LABELS AND ANCHORS SECURING: When creating labels or polar positioning elements in TikZ, you MUST use explicit standard syntax (e.g., label=90:{{$P_1$}} or [above=of P_1]). NEVER use shorthand styles like [90:P_1] directly inside bracket options, as this will trigger a fatal pgfkeys compiler crash.
+- TOKEN SAVING RULE FOR NETWORKS (CRITICAL): To conserve tokens and prevent output truncation, DO NOT redraw TikZ network diagrams in the "ANSWERS" section. You are strictly permitted to redraw the network ONLY in the "FULLY WORKED SOLUTIONS" section to visually demonstrate minimum cuts, flow paths, or EST/LST boxes. Ensure the TikZ code is as efficient as possible.
 
 {custom_instructions_block}
 OUTPUT EXACTLY LIKE THIS TEMPLATE:
