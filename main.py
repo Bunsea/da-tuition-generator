@@ -1428,13 +1428,25 @@ When instructed, your final combined output must follow this template structure 
                             p1_payload = ai_payload + ["\n\nPHASE 1 INSTRUCTION: You must now generate the exam questions. You MUST start your response EXACTLY with the tag ===LATEX_CONTENT_START=== and end it EXACTLY with ===LATEX_CONTENT_END===. Do not generate answers or solutions yet."]
                             res1 = client.models.generate_content(model=model_name, contents=p1_payload, config=gen_config)
                             
+                            # ---> NEW: Safeguard against empty Phase 1 responses <---
+                            if not res1 or not res1.text:
+                                raise ValueError("Phase 1 returned empty text. Forcing retry...")
+                            
                             st.toast(f"🏃 {model_name}: Phase 2 (Generating Answer Key)...")
                             p2_payload = p1_payload + [res1.text, "\n\nPHASE 2 INSTRUCTION: Excellent. Now generate the answer key for those exact questions. You MUST start your response EXACTLY with the tag ===LATEX_ANSWERS_START=== and end it EXACTLY with ===LATEX_ANSWERS_END===. Do not generate solutions yet."]
                             res2 = client.models.generate_content(model=model_name, contents=p2_payload, config=gen_config)
                             
+                            # ---> NEW: Safeguard against empty Phase 2 responses <---
+                            if not res2 or not res2.text:
+                                raise ValueError("Phase 2 returned empty text. Forcing retry...")
+                            
                             st.toast(f"🏃 {model_name}: Phase 3 (Generating Worked Solutions)...")
                             p3_payload = p2_payload + [res2.text, "\n\nPHASE 3 INSTRUCTION: Excellent. Finally, generate the fully worked solutions. You MUST start your response EXACTLY with the tag ===LATEX_SOLUTIONS_START=== and end it EXACTLY with ===LATEX_SOLUTIONS_END===. Take your time and use your full token capacity."]
                             res3 = client.models.generate_content(model=model_name, contents=p3_payload, config=gen_config)
+                            
+                            # ---> NEW: Safeguard against empty Phase 3 responses <---
+                            if not res3 or not res3.text:
+                                raise ValueError("Phase 3 returned empty text. Forcing retry...")
                             
                             st.toast(f"✅ Success! Engine used: {model_name}")
                             st.session_state.meta_model_used = model_name
