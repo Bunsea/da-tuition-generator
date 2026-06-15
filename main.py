@@ -144,7 +144,7 @@ def save_to_supabase(
     safe_topic = clean_topic.replace("/", "-").replace("\\", "-")
 
     # 5. Build the beautiful new filename using the variables that already exist!
-    file_base = f"{yr_short} {subject}{lvl_text} {safe_topic} Set {set_num}{dist_str}"
+    file_base = f"{safe_topic} Set {set_num}{dist_str} - {yr_short} {subject}{lvl_text}"
     pdf_path = f"{subject}/{year}/{file_base}.pdf"
     docx_path = f"{subject}/{year}/{file_base}.docx"
 
