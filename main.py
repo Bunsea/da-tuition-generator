@@ -1313,17 +1313,18 @@ Use this strictly for structural geometry: Networks, Critical Paths, 3D Trig dia
 
 CRITICAL GRAPHING REQUIREMENT:
 Whenever a question asks the student to "sketch" or "draw" a graph, you MUST provide the actual rendered graph in the Solutions and Answers sections using the LaTeX `pgfplots` package. 
-- You must code the visual plot using \begin{{tikzpicture}} \begin{{axis}}[...] ... \end{{axis}} \end{{tikzpicture}}. 
+- You must code the visual plot using \\begin{{tikzpicture}} \\begin{{axis}}[...] ... \\end{{axis}} \\end{{tikzpicture}}. 
 - NEVER just describe the graph in text. You must mathematically plot the curves, asymptotes, and intercepts using pgfplots.
 - NEVER use the setting `trig format plots=none` in your axis options. It does not exist and will crash the compiler. If plotting trigonometric functions, use `trig format plots=rad` or omit the setting entirely.
-- PREVENT DIMENSION ERRORS: When plotting rational functions or graphs with vertical asymptotes, you MUST restrict the vertical plotting domain to prevent "Dimension too large" LaTeX crashes. You must include `ymin=-10, ymax=10` (or appropriate limits) inside the \begin{{axis}}[...] options, AND you must include `restrict y to domain=-15:15` inside the \addplot[...] options to safely clip the asymptotes.
-- MANDATORY SEMICOLONS: Every single drawing command inside the axis environment (such as \addplot, \draw, \node, \coordinate) MUST end with a semicolon (;). Do not forget the semicolon, or the LaTeX compiler will crash.
-- MANDATORY GEOMETRY DIAGRAMS: For any trigonometry, geometry, or bearing word problems in the Solutions section, you MUST draw a clear, labeled diagram using standard TikZ (e.g., \begin{{tikzpicture}} \draw ... \end{{tikzpicture}} without the axis environment). You must visually label all known lengths, angles, compass directions, and vertices (e.g., A, B, C) to help students understand the spatial setup.
+- PREVENT DIMENSION ERRORS: When plotting rational functions or graphs with vertical asymptotes, you MUST restrict the vertical plotting domain to prevent "Dimension too large" LaTeX crashes. You must include `ymin=-10, ymax=10` (or appropriate limits) inside the \\begin{{axis}}[...] options, AND you must include `restrict y to domain=-15:15` inside the \\addplot[...] options to safely clip the asymptotes.
+- MANDATORY SEMICOLONS: Every single drawing command inside the axis environment (such as \\addplot, \\draw, \\node, \\coordinate) MUST end with a semicolon (;). Do not forget the semicolon, or the LaTeX compiler will crash.
+- MANDATORY GEOMETRY DIAGRAMS: For any trigonometry, geometry, or bearing word problems in the Solutions section, you MUST draw a clear, labeled diagram using standard TikZ (e.g., \\begin{{tikzpicture}} \\draw ... \\end{{tikzpicture}} without the axis environment). You must visually label all known lengths, angles, compass directions, and vertices (e.g., A, B, C) to help students understand the spatial setup.
 - TIKZ LABELS AND ANCHORS SECURING: When creating labels or polar positioning elements in TikZ, you MUST use explicit standard syntax (e.g., label=90:{{$P_1$}} or [above=of P_1]). NEVER use shorthand styles like [90:P_1] directly inside bracket options, as this will trigger a fatal pgfkeys compiler crash.
 - TOKEN SAVING RULE FOR NETWORKS (CRITICAL): To conserve tokens and prevent output truncation, DO NOT redraw TikZ network diagrams in the "ANSWERS" section. You are strictly permitted to redraw the network ONLY in the "FULLY WORKED SOLUTIONS" section to visually demonstrate minimum cuts, flow paths, or EST/LST boxes. Ensure the TikZ code is as efficient as possible.
 
 {custom_instructions_block}
-OUTPUT EXACTLY LIKE THIS TEMPLATE:
+We will generate this exam in 3 separate phases to avoid token limits.
+When instructed, your final combined output must follow this template structure exactly:
 {template_f}
 
 {template_c}
@@ -1391,7 +1392,7 @@ OUTPUT EXACTLY LIKE THIS TEMPLATE:
                     if exemplar_questions.strip():
                         ai_payload.append(f"\n\n[CLONE EXEMPLARS - TEXT INPUT]:\n{exemplar_questions}")
 
-                    # 2. Catch file/photo uploads (Your existing logic)
+                    # 2. Catch file/photo uploads
                     if uploaded_photo is not None:
                         if uploaded_photo.name.lower().endswith(".pdf"):
                             reader = PdfReader(uploaded_photo)
@@ -1422,42 +1423,50 @@ OUTPUT EXACTLY LIKE THIS TEMPLATE:
 
                     for model_name in models_to_try:
                         try:
-                            response = client.models.generate_content(
-                                model=model_name,
-                                contents=ai_payload,
-                                config=gen_config,
-                            )
-                            # Log which model successfully won the job!
+                            # ─── INVISIBLE RELAY ENGINE (3 PHASES) ───
+                            st.toast(f"🏃 {model_name}: Phase 1 (Generating Questions)...")
+                            p1_payload = ai_payload + ["\n\nPHASE 1 INSTRUCTION: Generate the FILENAME block (if required) and the LATEX_CONTENT block ONLY. Stop immediately after ===LATEX_CONTENT_END===. DO NOT generate answers or solutions yet."]
+                            res1 = client.models.generate_content(model=model_name, contents=p1_payload, config=gen_config)
+                            
+                            st.toast(f"🏃 {model_name}: Phase 2 (Generating Answer Key)...")
+                            p2_payload = p1_payload + [res1.text, "\n\nPHASE 2 INSTRUCTION: Now, generate the LATEX_ANSWERS block for those exact questions. Stop immediately after ===LATEX_ANSWERS_END===. DO NOT generate solutions yet."]
+                            res2 = client.models.generate_content(model=model_name, contents=p2_payload, config=gen_config)
+                            
+                            st.toast(f"🏃 {model_name}: Phase 3 (Generating Worked Solutions)...")
+                            p3_payload = p2_payload + [res2.text, "\n\nPHASE 3 INSTRUCTION: Finally, generate the LATEX_SOLUTIONS block with highly rigorous, step-by-step fully worked solutions. Take a deep breath and use your full 8192 token capacity to ensure absolutely no math is cut off. End with ===LATEX_SOLUTIONS_END==="]
+                            res3 = client.models.generate_content(model=model_name, contents=p3_payload, config=gen_config)
+                            
                             st.toast(f"✅ Success! Engine used: {model_name}")
                             st.session_state.meta_model_used = model_name
+                            
+                            # Combine the relay batons!
+                            out = res1.text + "\n\n" + res2.text + "\n\n" + res3.text
+                            
+                            # Aggregate Token Tracking
+                            in_tok = 0
+                            out_tok = 0
+                            for r in [res1, res2, res3]:
+                                if r.usage_metadata:
+                                    in_tok += getattr(r.usage_metadata, 'prompt_token_count', 0)
+                                    out_tok += getattr(r.usage_metadata, 'candidates_token_count', 0)
+                                    
+                            st.session_state.meta_input_tokens = in_tok
+                            st.session_state.meta_output_tokens = out_tok
+                            st.session_state.used_search = (subject in live_search_subjects and use_live_search)
+                            
                             break  # Success! Break out of the fallback queue
                         except Exception as e:
                             last_error = e
                             if "503" in str(e):
-                                st.toast(
-                                    f"🚦 {model_name} busy. Pivoting to next model..."
-                                )
-                                continue  # Move to the next model in the list
+                                st.toast(f"🚦 {model_name} busy. Pivoting to next model...")
+                                continue
                             else:
-                                raise e  # If it's a different error (like a bad API key), stop immediately
+                                raise e
 
-                    if not response:
-                        # If ALL models in the queue fail with a 503, push the error to the outer
-                        # retry loop so the app waits 5 seconds before trying the whole queue again.
+                    if not out:
                         raise last_error
-                    out = response.text
 
-                    # 4. Token Tracking
-                    if response.usage_metadata:
-                        st.session_state.meta_input_tokens = (
-                            response.usage_metadata.prompt_token_count
-                        )
-                        st.session_state.meta_output_tokens = (
-                            response.usage_metadata.candidates_token_count
-                        )
-                    st.session_state.used_search = (subject in live_search_subjects and use_live_search)
-
-                    break  # If successful, break out of the loop
+                    break  # If successful, break out of the retry loop
                 except Exception as e:
                     if "503" in str(e) and attempt < max_retries - 1:
                         st.toast(
