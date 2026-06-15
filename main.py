@@ -1460,8 +1460,9 @@ When instructed, your final combined output must follow this template structure 
                             break  # Success! Break out of the fallback queue
                         except Exception as e:
                             last_error = e
-                            if "503" in str(e):
-                                st.toast(f"🚦 {model_name} busy. Pivoting to next model...")
+                            # ---> UPDATED: Now it catches our empty text error and pivots to the next model! <---
+                            if "503" in str(e) or "empty text" in str(e):
+                                st.toast(f"🚦 {model_name} hiccuped. Pivoting to next model...")
                                 continue
                             else:
                                 raise e
@@ -1471,9 +1472,10 @@ When instructed, your final combined output must follow this template structure 
 
                     break  # If successful, break out of the retry loop
                 except Exception as e:
-                    if "503" in str(e) and attempt < max_retries - 1:
+                    # ---> UPDATED: Now it catches our empty text error and retries the whole loop! <---
+                    if ("503" in str(e) or "empty text" in str(e)) and attempt < max_retries - 1:
                         st.toast(
-                            f"Google servers busy. Retrying automatically in 3 seconds... (Attempt {attempt + 1}/{max_retries})"
+                            f"AI Hiccup. Retrying automatically in 3 seconds... (Attempt {attempt + 1}/{max_retries})"
                         )
                         time.sleep(3)
                         continue
