@@ -1371,7 +1371,7 @@ When instructed, your final combined output must follow this template structure 
                         "Science",
                     ]
 
-                    # ---> NEW: Cost-Saving Token Limiter & PYTHON SANDBOX <---
+                    # ---> NEW: Token Limiter, Python Sandbox & SAFETY OVERRIDE <---
                     from google.genai import types
                     
                     # Initialize the tool list with the Python Code Execution sandbox!
@@ -1380,9 +1380,28 @@ When instructed, your final combined output must follow this template structure 
                     if subject in live_search_subjects and use_live_search:
                         active_tools.append(types.Tool(google_search=types.GoogleSearch()))
                     
+                    # Override the hyper-sensitive safety filters to allow math terms like "Inequalities"
                     gen_config = types.GenerateContentConfig(
                         max_output_tokens=8192,
-                        tools=active_tools
+                        tools=active_tools,
+                        safety_settings=[
+                            types.SafetySetting(
+                                category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                                threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                            ),
+                            types.SafetySetting(
+                                category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                                threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                            ),
+                            types.SafetySetting(
+                                category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                                threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                            ),
+                            types.SafetySetting(
+                                category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                                threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                            )
+                        ]
                     )
 
                     # ---> UPGRADED: Dual Payload Builder <---
