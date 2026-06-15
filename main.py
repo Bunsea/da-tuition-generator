@@ -1447,15 +1447,17 @@ When instructed, your final combined output must follow this template structure 
                             p1_payload = ai_payload + ["\n\nPHASE 1 INSTRUCTION: You must now generate the exam questions AND the answer key. First, generate the questions between ===LATEX_CONTENT_START=== and ===LATEX_CONTENT_END===. Then, immediately generate the short answers between ===LATEX_ANSWERS_START=== and ===LATEX_ANSWERS_END===. Do not generate worked solutions yet."]
                             res1 = client.models.generate_content(model=model_name, contents=p1_payload, config=gen_config)
                             
-                            if not res1 or not res1.text:
-                                raise ValueError("Phase 1 returned empty text. Forcing retry...")
+                            # ---> BULLETPROOF CHECK: Did it actually finish Phase 1? <---
+                            if not res1 or not res1.text or "LATEX_ANSWERS_END" not in res1.text:
+                                raise ValueError("Phase 1 returned truncated or empty text. Forcing retry...")
                             
                             st.toast(f"🏃 {model_name}: Phase 2 (Generating Worked Solutions)...")
                             p2_payload = p1_payload + [res1.text, "\n\nPHASE 2 INSTRUCTION: Excellent. Finally, generate the step-by-step fully worked solutions for all questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===. Take your time and show all mathematical steps."]
                             res2 = client.models.generate_content(model=model_name, contents=p2_payload, config=gen_config)
                             
-                            if not res2 or not res2.text:
-                                raise ValueError("Phase 2 returned empty text. Forcing retry...")
+                            # ---> BULLETPROOF CHECK: Did it actually finish Phase 2? <---
+                            if not res2 or not res2.text or "LATEX_SOLUTIONS_END" not in res2.text:
+                                raise ValueError("Phase 2 returned truncated or empty text. Forcing retry...")
                             
                             st.toast(f"✅ Success! Engine used: {model_name}")
                             st.session_state.meta_model_used = model_name
