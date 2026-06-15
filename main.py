@@ -1425,22 +1425,23 @@ When instructed, your final combined output must follow this template structure 
                         try:
                             # ─── INVISIBLE RELAY ENGINE (3 PHASES) ───
                             st.toast(f"🏃 {model_name}: Phase 1 (Generating Questions)...")
-                            p1_payload = ai_payload + ["\n\nPHASE 1 INSTRUCTION: Generate the FILENAME block (if required) and the LATEX_CONTENT block ONLY. Stop immediately after ===LATEX_CONTENT_END===. DO NOT generate answers or solutions yet."]
+                            p1_payload = ai_payload + ["\n\nPHASE 1 INSTRUCTION: You must now generate the exam questions. You MUST start your response EXACTLY with the tag ===LATEX_CONTENT_START=== and end it EXACTLY with ===LATEX_CONTENT_END===. Do not generate answers or solutions yet."]
                             res1 = client.models.generate_content(model=model_name, contents=p1_payload, config=gen_config)
                             
                             st.toast(f"🏃 {model_name}: Phase 2 (Generating Answer Key)...")
-                            p2_payload = p1_payload + [res1.text, "\n\nPHASE 2 INSTRUCTION: Now, generate the LATEX_ANSWERS block for those exact questions. Stop immediately after ===LATEX_ANSWERS_END===. DO NOT generate solutions yet."]
+                            p2_payload = p1_payload + [res1.text, "\n\nPHASE 2 INSTRUCTION: Excellent. Now generate the answer key for those exact questions. You MUST start your response EXACTLY with the tag ===LATEX_ANSWERS_START=== and end it EXACTLY with ===LATEX_ANSWERS_END===. Do not generate solutions yet."]
                             res2 = client.models.generate_content(model=model_name, contents=p2_payload, config=gen_config)
                             
                             st.toast(f"🏃 {model_name}: Phase 3 (Generating Worked Solutions)...")
-                            p3_payload = p2_payload + [res2.text, "\n\nPHASE 3 INSTRUCTION: Finally, generate the LATEX_SOLUTIONS block with highly rigorous, step-by-step fully worked solutions. Take a deep breath and use your full 8192 token capacity to ensure absolutely no math is cut off. End with ===LATEX_SOLUTIONS_END==="]
+                            p3_payload = p2_payload + [res2.text, "\n\nPHASE 3 INSTRUCTION: Excellent. Finally, generate the fully worked solutions. You MUST start your response EXACTLY with the tag ===LATEX_SOLUTIONS_START=== and end it EXACTLY with ===LATEX_SOLUTIONS_END===. Take your time and use your full token capacity."]
                             res3 = client.models.generate_content(model=model_name, contents=p3_payload, config=gen_config)
                             
                             st.toast(f"✅ Success! Engine used: {model_name}")
                             st.session_state.meta_model_used = model_name
                             
-                            # Combine the relay batons!
+                            # Combine the relay batons and strip out any accidental markdown formatting!
                             out = res1.text + "\n\n" + res2.text + "\n\n" + res3.text
+                            out = out.replace("```latex", "").replace("```", "")
                             
                             # Aggregate Token Tracking
                             in_tok = 0
@@ -1503,18 +1504,20 @@ When instructed, your final combined output must follow this template structure 
             else:
                 display_topic = f"{clean_topic} Set {current_set_number}"
 
+            # ---> UPGRADED: Forgiving "Salvage" Regex Extractors <---
+            # If the AI gets cut off and misses an END tag, this saves everything it wrote!
             c_m = re.search(
-                "===?\\s*LATEX_CONTENT_START\\s*===?(.*?)===?\\s*LATEX_CONTENT_END\\s*===?",
+                r"===?\s*LATEX_CONTENT_START\s*===?(.*?)(?:===?\s*LATEX_CONTENT_END\s*===?|===?\s*LATEX_ANSWERS_START|$)",
                 out,
                 re.DOTALL | re.IGNORECASE,
             )
             a_m = re.search(
-                "===?\\s*LATEX_ANSWERS_START\\s*===?(.*?)===?\\s*LATEX_ANSWERS_END\\s*===?",
+                r"===?\s*LATEX_ANSWERS_START\s*===?(.*?)(?:===?\s*LATEX_ANSWERS_END\s*===?|===?\s*LATEX_SOLUTIONS_START|$)",
                 out,
                 re.DOTALL | re.IGNORECASE,
             )
             s_m = re.search(
-                "===?\\s*LATEX_SOLUTIONS_START\\s*===?(.*?)===?\\s*LATEX_SOLUTIONS_END\\s*===?",
+                r"===?\s*LATEX_SOLUTIONS_START\s*===?(.*?)(?:===?\s*LATEX_SOLUTIONS_END\s*===?|$)",
                 out,
                 re.DOTALL | re.IGNORECASE,
             )
