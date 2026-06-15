@@ -1423,39 +1423,32 @@ When instructed, your final combined output must follow this template structure 
 
                     for model_name in models_to_try:
                         try:
-                            # ─── INVISIBLE RELAY ENGINE (3 PHASES) ───
-                            st.toast(f"🏃 {model_name}: Phase 1 (Generating Questions)...")
-                            p1_payload = ai_payload + ["\n\nPHASE 1 INSTRUCTION: You must now generate the exam questions. Place your entire output between the tags ===LATEX_CONTENT_START=== and ===LATEX_CONTENT_END===. Do not generate answers or solutions yet."]
+                            # ─── INVISIBLE RELAY ENGINE (2 PHASES) ───
+                            st.toast(f"🏃 {model_name}: Phase 1 (Generating Questions & Answers)...")
+                            p1_payload = ai_payload + ["\n\nPHASE 1 INSTRUCTION: You must now generate the exam questions AND the answer key. First, generate the questions between ===LATEX_CONTENT_START=== and ===LATEX_CONTENT_END===. Then, immediately generate the short answers between ===LATEX_ANSWERS_START=== and ===LATEX_ANSWERS_END===. Do not generate worked solutions yet."]
                             res1 = client.models.generate_content(model=model_name, contents=p1_payload, config=gen_config)
                             
                             if not res1 or not res1.text:
                                 raise ValueError("Phase 1 returned empty text. Forcing retry...")
                             
-                            st.toast(f"🏃 {model_name}: Phase 2 (Generating Answer Key)...")
-                            p2_payload = p1_payload + [res1.text, "\n\nPHASE 2 INSTRUCTION: Excellent. Now generate the answer key for those exact questions. Place your entire output between the tags ===LATEX_ANSWERS_START=== and ===LATEX_ANSWERS_END===. Do not generate solutions yet."]
+                            st.toast(f"🏃 {model_name}: Phase 2 (Generating Worked Solutions)...")
+                            p2_payload = p1_payload + [res1.text, "\n\nPHASE 2 INSTRUCTION: Excellent. Finally, generate the step-by-step fully worked solutions for all questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===. Take your time and show all mathematical steps."]
                             res2 = client.models.generate_content(model=model_name, contents=p2_payload, config=gen_config)
                             
                             if not res2 or not res2.text:
                                 raise ValueError("Phase 2 returned empty text. Forcing retry...")
                             
-                            st.toast(f"🏃 {model_name}: Phase 3 (Generating Worked Solutions)...")
-                            p3_payload = p2_payload + [res2.text, "\n\nPHASE 3 INSTRUCTION: Excellent. Finally, generate the step-by-step fully worked solutions for all questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===. Take your time and show all mathematical steps."]
-                            res3 = client.models.generate_content(model=model_name, contents=p3_payload, config=gen_config)
-                            
-                            if not res3 or not res3.text:
-                                raise ValueError("Phase 3 returned empty text. Forcing retry...")
-                            
                             st.toast(f"✅ Success! Engine used: {model_name}")
                             st.session_state.meta_model_used = model_name
                             
                             # Combine the relay batons and strip out any accidental markdown formatting!
-                            out = res1.text + "\n\n" + res2.text + "\n\n" + res3.text
+                            out = res1.text + "\n\n" + res2.text
                             out = out.replace("```latex", "").replace("```", "")
                             
                             # Aggregate Token Tracking
                             in_tok = 0
                             out_tok = 0
-                            for r in [res1, res2, res3]:
+                            for r in [res1, res2]:
                                 if r.usage_metadata:
                                     in_tok += getattr(r.usage_metadata, 'prompt_token_count', 0)
                                     out_tok += getattr(r.usage_metadata, 'candidates_token_count', 0)
