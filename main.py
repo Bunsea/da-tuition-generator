@@ -1445,6 +1445,13 @@ When instructed, your final combined output must follow this template structure 
                             if not res3 or not res3.text:
                                 raise ValueError("Phase 3 returned empty text. Forcing retry...")
                             
+                            st.toast(f"✅ Success! Engine used: {model_name}")
+                            st.session_state.meta_model_used = model_name
+                            
+                            # Combine the relay batons and strip out any accidental markdown formatting!
+                            out = res1.text + "\n\n" + res2.text + "\n\n" + res3.text
+                            out = out.replace("```latex", "").replace("```", "")
+                            
                             # Aggregate Token Tracking
                             in_tok = 0
                             out_tok = 0
