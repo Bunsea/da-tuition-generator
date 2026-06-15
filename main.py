@@ -1425,35 +1425,25 @@ When instructed, your final combined output must follow this template structure 
                         try:
                             # ─── INVISIBLE RELAY ENGINE (3 PHASES) ───
                             st.toast(f"🏃 {model_name}: Phase 1 (Generating Questions)...")
-                            p1_payload = ai_payload + ["\n\nPHASE 1 INSTRUCTION: You must now generate the exam questions. You MUST start your response EXACTLY with the tag ===LATEX_CONTENT_START=== and end it EXACTLY with ===LATEX_CONTENT_END===. Do not generate answers or solutions yet."]
+                            p1_payload = ai_payload + ["\n\nPHASE 1 INSTRUCTION: You must now generate the exam questions. Place your entire output between the tags ===LATEX_CONTENT_START=== and ===LATEX_CONTENT_END===. Do not generate answers or solutions yet."]
                             res1 = client.models.generate_content(model=model_name, contents=p1_payload, config=gen_config)
                             
-                            # ---> NEW: Safeguard against empty Phase 1 responses <---
                             if not res1 or not res1.text:
                                 raise ValueError("Phase 1 returned empty text. Forcing retry...")
                             
                             st.toast(f"🏃 {model_name}: Phase 2 (Generating Answer Key)...")
-                            p2_payload = p1_payload + [res1.text, "\n\nPHASE 2 INSTRUCTION: Excellent. Now generate the answer key for those exact questions. You MUST start your response EXACTLY with the tag ===LATEX_ANSWERS_START=== and end it EXACTLY with ===LATEX_ANSWERS_END===. Do not generate solutions yet."]
+                            p2_payload = p1_payload + [res1.text, "\n\nPHASE 2 INSTRUCTION: Excellent. Now generate the answer key for those exact questions. Place your entire output between the tags ===LATEX_ANSWERS_START=== and ===LATEX_ANSWERS_END===. Do not generate solutions yet."]
                             res2 = client.models.generate_content(model=model_name, contents=p2_payload, config=gen_config)
                             
-                            # ---> NEW: Safeguard against empty Phase 2 responses <---
                             if not res2 or not res2.text:
                                 raise ValueError("Phase 2 returned empty text. Forcing retry...")
                             
                             st.toast(f"🏃 {model_name}: Phase 3 (Generating Worked Solutions)...")
-                            p3_payload = p2_payload + [res2.text, "\n\nPHASE 3 INSTRUCTION: Excellent. Finally, generate the fully worked solutions. You MUST start your response EXACTLY with the tag ===LATEX_SOLUTIONS_START=== and end it EXACTLY with ===LATEX_SOLUTIONS_END===. Take your time and use your full token capacity."]
+                            p3_payload = p2_payload + [res2.text, "\n\nPHASE 3 INSTRUCTION: Excellent. Finally, generate the step-by-step fully worked solutions for all questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===. Take your time and show all mathematical steps."]
                             res3 = client.models.generate_content(model=model_name, contents=p3_payload, config=gen_config)
                             
-                            # ---> NEW: Safeguard against empty Phase 3 responses <---
                             if not res3 or not res3.text:
                                 raise ValueError("Phase 3 returned empty text. Forcing retry...")
-                            
-                            st.toast(f"✅ Success! Engine used: {model_name}")
-                            st.session_state.meta_model_used = model_name
-                            
-                            # Combine the relay batons and strip out any accidental markdown formatting!
-                            out = res1.text + "\n\n" + res2.text + "\n\n" + res3.text
-                            out = out.replace("```latex", "").replace("```", "")
                             
                             # Aggregate Token Tracking
                             in_tok = 0
@@ -1733,7 +1723,7 @@ if st.session_state.questions_text:
 
     yr_short = _y.replace("Year ", "Yr")
     lvl_part = f" {_d}" if _d else ""
-    safe_name = f"{yr_short} {_s}{lvl_part} {_t.replace('/', '_')} Set {_set}{dist_str}"
+    safe_name = f"{_t.replace('/', '_')} Set {_set}{dist_str} - {yr_short} {_s}{lvl_part}"
 
     dl1, dl2, dl3 = st.columns(3)
     with dl1:
