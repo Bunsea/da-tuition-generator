@@ -1433,8 +1433,8 @@ When instructed, your final combined output must follow this template structure 
                     # 3. Call the AI with a Multi-Tiered Fallback Queue
                     models_to_try = [
                         "gemini-3.5-flash",  # Tier 1: Blazing Fast & Cheap (First Choice)
-                        "gemini-2.5-flash",  # Tier 2: Heavy Reasoning (Backup)
-                        "gemini-2.5-pro",  # Tier 3: Stable Bedrock (Ultimate Safety Net)
+                        "gemini-2.5-flash",  # Tier 2: Highly Reliable Backup Flash
+                        "gemini-3.1-pro",    # Tier 3: Stable Bedrock (Ultimate Safety Net)
                     ]
 
                     response = None
