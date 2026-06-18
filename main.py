@@ -903,7 +903,7 @@ EXAMINER RULES:
 3. SUB-QUESTIONS: Use a nested `\\begin{{enumerate}}` environment so they format as (a), (b), (c).
 4. ANSWERS PAGE: Do NOT use display math (`\\[ ... \\]` or `$$...$$`) for the answers. Use inline math (`$...$`) so all answers naturally align left.
 5. {layout_instruction}
-6. "MISSING \ITEM" CRASH PREVENTION: The VERY FIRST command immediately after `\\begin{{enumerate}}` or `\\begin{{itemize}}` MUST be `\\item`. NEVER place `\\vspace`, introductory text, or blank lines between the begin environment and the first item. This specifically causes the fatal "perhaps a missing \item" crash. Put all text and spacing AFTER the `\\item`.
+6. "MISSING \ITEM" CRASH PREVENTION: Immediately after starting a `\\begin{{enumerate}}` or `\\begin{{itemize}}`, the next command MUST be a valid `\\item` (e.g., `\\item` or `\\item[(A)]`). NEVER place `\\vspace`, text, or blank lines before the first item. Place all spacing commands AFTER the item text.
 7. SECTION TITLES: Name each section purely as "Section 1", "Section 2", etc. You MUST use the exact standard syntax `\\section*{{Section X}}`. NEVER invent undefined commands like `\\sectionsection`.
 8. MULTIPLE CHOICE: You MUST heavily randomize the correct answer options (A, B, C, D) across the multiple-choice section. The correct answer must NOT always be 'A'.
 9. PYTHON CALCULATOR SANDBOX (CRITICAL): You are equipped with a Python Code Execution tool. You MUST use it to calculate exact final decimal answers for strictly numeric topics like Financial Mathematics, Compound Interest, Annuities, or Statistics. 
