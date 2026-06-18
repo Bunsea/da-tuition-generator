@@ -1292,7 +1292,7 @@ CRITICAL EXCEPTIONS:
     - Do NOT generate \\documentclass, \\usepackage, \\begin{{document}}, \\end{{document}}, or \\geometry.
     - If you include any preamble-style commands, the system will crash.
     - Provide raw LaTeX code that starts immediately with \\section* or \\begin{{enumerate}}.
-13. MANDATORY ENVIRONMENT CLOSING: Every single `\begin{enumerate}`, `\begin{itemize}`, `\begin{align*}`, or `\begin{tikzpicture}` MUST have a matching `\end{...}` tag. You must meticulously check that no environments are left open, as an unclosed environment will fatally crash the compiler.
+13. MANDATORY ENVIRONMENT CLOSING: Every single `\\begin{{enumerate}}`, `\\begin{{itemize}}`, `\\begin{{align*}}`, or `\\begin{{tikzpicture}}` MUST have a matching `\\end{{...}}` tag. You must meticulously check that no environments are left open, as an unclosed environment will fatally crash the compiler.
 {syllabus_ban}
 {auto_name_rule}
 
