@@ -489,18 +489,19 @@ def _escape_bare_ampersands(text: str) -> str:
 
 
 def sanitize_ai_latex(text: str) -> str:
-    text = re.sub(r"\\documentclass\[.*?\]\{.*?\}|\\documentclass\{.*?\}", "", text)
-    text = re.sub(r"\\usepackage\[.*?\]\{.*?\}|\\usepackage\{.*?\}", "", text)
+    # Aggressively remove all possible preamble/document structure commands
+    text = re.sub(r"\\documentclass.*?\{.*?\}", "", text, flags=re.DOTALL)
+    text = re.sub(r"\\usepackage.*?\{.*?\}", "", text, flags=re.DOTALL)
+    text = re.sub(r"\\geometry\{.*?\}", "", text, flags=re.DOTALL)
     text = re.sub(r"\\begin\{document\}", "", text)
     text = re.sub(r"\\end\{document\}", "", text)
-
+    text = re.sub(r"\\pagestyle\{.*?\}", "", text)
+    
+    # ... keep your existing replacements (bolding, ampersands, etc) ...
     text = re.sub(r"\*\*(.*?)\*\*", r"\\textbf{\1}", text)
     text = re.sub(r"(?<!\\)%", r"\%", text)
     text = _escape_bare_ampersands(text)
-    text = re.sub(r"\\\]\s*\\hfill", r"\\]\n\\vspace{0.2cm}\\hfill", text)
-    text = re.sub(r"\\begin{enumerate}\[.*?\]", r"\\begin{enumerate}", text)
-    text = re.sub(r"\\setcounter\{.*?\}\{.*?\}", "", text)
-    text = re.sub(r"\\hr\b", r"\\hrule", text)
+    
     return text.strip()
 
 
@@ -1286,6 +1287,10 @@ CRITICAL EXCEPTIONS:
 - DO NOT use the Python tool for pure algebraic, calculus, or trigonometric topics (e.g., Parametrics, Inverse Functions, Polynomials, Integration). Evaluate symbolic algebra using your own internal reasoning.
 - DO NOT use the Python tool to solve Networks, Critical Path Analysis, Maximum Flow, or Geometry problems. Draw the TikZ diagrams and evaluate those structural networks purely using your internal reasoning.
 11. UNIFIED QUESTION CLONING RULE (CRITICAL): If the user provides text inside [CLONE EXEMPLARS] or attaches an image/PDF file, your primary objective shifts to reverse-engineering those target items. Analyze their mathematical mechanics, formatting phrasing, structural complexity, and cognitive depth. You MUST generate original, highly precise variations that test the exact same competency tier. Change numeric values, algebraic configurations, or contextual word scenarios so the output operates as a perfect parallel practice set. Do not clone formatting errors or unrelated headers.
+12. CRITICAL OUTPUT FORMAT: You must output ONLY the raw content (questions, answers, and solutions). 
+    - Do NOT generate \documentclass, \usepackage, \begin{document}, \end{document}, or \geometry.
+    - If you include any preamble-style commands, the system will crash.
+    - Provide raw LaTeX code that starts immediately with \section* or \begin{enumerate}.
 {syllabus_ban}
 {auto_name_rule}
 
