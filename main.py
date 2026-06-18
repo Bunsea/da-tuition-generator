@@ -1254,3 +1254,529 @@ if generate_btn:
 
         # ---> UPGRADED: Dynamic Syllabus & Level Guardrails <---
         syllabus_ban = ""
+        if subject == "Maths":
+            ext_ban = ""
+            # If the user selects Advanced or Standard, explicitly ban Extension topics
+            if actual_level in ["Advanced", "Standard"]:
+                ext_ban = " CRITICAL: DO NOT include Extension 1 topics (e.g., Compound/Double Angles, Sum/Difference identities, t-formulae, Inverse Trig functions, Polynomial remainder theorem, or Combinatorics)."
+
+            syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {actual_level} syllabus. NEVER generate questions on obsolete topics (e.g., Locus, 3D Trigonometry, Perpendicular Distance, Angle of Inclination).{ext_ban}"
+
+        # ---> FIXED: Doubled-up backslashes so Python string evaluation doesn't crash on \u <---
+        prompt = f"""You are a NESA Examiner.
+Generate an examination on "{exam_focus}" for {grades_string}{level_text} in {subject}.
+
+CRITICAL QUESTION DISTRIBUTION (OBEY EXACTLY): 
+- You MUST generate EXACTLY {total_q} questions in total.
+- Breakdown: {", ".join(dist_req)}
+- {strict_negatives}
+
+{style_block}
+
+EXAMINER RULES:
+1. SPELLING: Australian/UK English.
+2. MARKS: 1 to 3 marks per free-response. Reserve 3-marks for extreme difficulty. Make questions demanding.
+3. SUB-QUESTIONS: Use a nested `\\begin{{enumerate}}` environment so they format as (a), (b), (c).
+4. ANSWERS PAGE: Do NOT use display math (`\\[ ... \\]` or `$$...$$`) for the answers. Use inline math (`$...$`) so all answers naturally align left.
+5. {layout_instruction}
+6. CRITICAL LATEX FIX: The VERY FIRST command immediately after `\\begin{{enumerate}}` or `\\begin{{itemize}}` MUST be `\\item`. NEVER place introductory text, spacing commands, or any other characters between the begin environment and the first item. If you have an introduction, place it AFTER the `\\item`.
+7. SECTION TITLES: Name each section purely as "Section 1", "Section 2", etc. You MUST use the exact standard syntax `\\section*{{Section X}}`. NEVER invent undefined commands like `\\sectionsection`.
+8. MULTIPLE CHOICE: You MUST heavily randomize the correct answer options (A, B, C, D) across the multiple-choice section. The correct answer must NOT always be 'A'.
+9. TOKEN ECONOMY & STRICT MATHEMATICAL CONCISENESS: Output the absolute minimum text required for "FULLY WORKED SOLUTIONS". Show only the primary formula, key substitutions, and final evaluation. Completely eliminate conversational text, narrative explanations, and trivial arithmetic. Group multiple algebraic simplifications onto a single line. Your primary goal is to minimize total output tokens while keeping the logic mathematically sound.
+10. PYTHON CALCULATOR SANDBOX (CRITICAL): You are equipped with a Python Code Execution tool. You MUST use it to calculate exact final decimal answers for strictly numeric topics like Financial Mathematics, Compound Interest, Annuities, or Statistics. 
+CRITICAL EXCEPTIONS: 
+- DO NOT use the Python tool for pure algebraic, calculus, or trigonometric topics (e.g., Parametrics, Inverse Functions, Polynomials, Integration). Evaluate symbolic algebra using your own internal reasoning.
+- DO NOT use the Python tool to solve Networks, Critical Path Analysis, Maximum Flow, or Geometry problems. Draw the TikZ diagrams and evaluate those structural networks purely using your internal reasoning.
+11. UNIFIED QUESTION CLONING RULE (CRITICAL): If the user provides text inside [CLONE EXEMPLARS] or attaches an image/PDF file, your primary objective shifts to reverse-engineering those target items. Analyze their mathematical mechanics, formatting phrasing, structural complexity, and cognitive depth. You MUST generate original, highly precise variations that test the exact same competency tier. Change numeric values, algebraic configurations, or contextual word scenarios so the output operates as a perfect parallel practice set. Do not clone formatting errors or unrelated headers.
+12. CRITICAL OUTPUT FORMAT: You must output ONLY the raw content (questions, answers, and solutions). 
+    - Do NOT generate \\documentclass, \\usepackage, \\begin{{document}}, \\end{{document}}, or \\geometry.
+    - If you include any preamble-style commands, the system will crash.
+    - Provide raw LaTeX code that starts immediately with \\section* or \\begin{{enumerate}}.
+{syllabus_ban}
+{auto_name_rule}
+
+DIAGRAM RULES (CRITICAL):
+You have TWO graphing engines available. You MUST choose the correct one based on the diagram type.
+
+ENGINE 1: THE PYTHON ENGINE
+Use this strictly for continuous 2D Cartesian functions, derivatives, Projectile Motion trajectories, Slope Fields, and Normal Distributions.
+Syntax:
+GRAPH_START
+type: slope_field    (Options: function, slope_field, normal)
+expr: x + y          (For function/slope_field. Use 'x' and 'y')
+mean: 0              (For normal only)
+std: 1               (For normal only)
+shade_min: -1        (For normal only)
+shade_max: 1         (For normal only)
+xmin: -5
+xmax: 5
+ymin: -5
+ymax: 5
+GRAPH_END
+
+ENGINE 2: NATIVE TikZ
+Use this strictly for structural geometry: Networks, Critical Paths, 3D Trig diagrams, 3D Vectors, and Forces/Inclined Planes. The compiler has `\\usepackage{{tikz}}` installed (do NOT use pgfplots). Inject your `\\begin{{tikzpicture}}` code directly into the LaTeX output.
+
+CRITICAL GRAPHING REQUIREMENT:
+Whenever a question asks the student to "sketch" or "draw" a graph, you MUST provide the actual rendered graph in the Solutions and Answers sections using the LaTeX `pgfplots` package. 
+- You must code the visual plot using \\begin{{tikzpicture}} \\begin{{axis}}[...] ... \\end{{axis}} \\end{{tikzpicture}}. 
+- NEVER just describe the graph in text. You must mathematically plot the curves, asymptotes, and intercepts using pgfplots.
+- NEVER use the setting `trig format plots=none` in your axis options. It does not exist and will crash the compiler. If plotting trigonometric functions, use `trig format plots=rad` or omit the setting entirely.
+- PREVENT DIMENSION ERRORS: When plotting rational functions or graphs with vertical asymptotes, you MUST restrict the vertical plotting domain to prevent "Dimension too large" LaTeX crashes. You must include `ymin=-10, ymax=10` (or appropriate limits) inside the \\begin{{axis}}[...] options, AND you must include `restrict y to domain=-15:15` inside the \\addplot[...] options to safely clip the asymptotes.
+- MANDATORY SEMICOLONS: Every single drawing command inside the axis environment (such as \\addplot, \\draw, \\node, \\coordinate) MUST end with a semicolon (;). Do not forget the semicolon, or the LaTeX compiler will crash.
+- MANDATORY GEOMETRY DIAGRAMS: For any trigonometry, geometry, or bearing word problems in the Solutions section, you MUST draw a clear, labeled diagram using standard TikZ (e.g., \\begin{{tikzpicture}} \\draw ... \\end{{tikzpicture}} without the axis environment). You must visually label all known lengths, angles, compass directions, and vertices (e.g., A, B, C) to help students understand the spatial setup.
+- TIKZ LABELS AND ANCHORS SECURING: When creating labels or polar positioning elements in TikZ, you MUST use explicit standard syntax (e.g., label=90:{{$P_1$}} or [above=of P_1]). NEVER use shorthand styles like [90:P_1] directly inside bracket options, as this will trigger a fatal pgfkeys compiler crash.
+- TOKEN SAVING RULE FOR NETWORKS (CRITICAL): To conserve tokens and prevent output truncation, DO NOT redraw TikZ network diagrams in the "ANSWERS" section. You are strictly permitted to redraw the network ONLY in the "FULLY WORKED SOLUTIONS" section to visually demonstrate minimum cuts, flow paths, or EST/LST boxes. Ensure the TikZ code is as efficient as possible.
+
+{custom_instructions_block}
+We will generate this exam in 3 separate phases to avoid token limits.
+When instructed, your final combined output must follow this template structure exactly:
+{template_f}
+
+{template_c}
+
+{template_a}
+
+{template_s}
+"""
+        # Dynamic custom loading badge wrapper block (Centered)
+        loading_placeholder = st.empty()
+        with loading_placeholder.container():
+            st.markdown(
+                f"""
+                <div style="text-align: center; padding: 40px 20px;">
+                    <img src="data:image/png;base64,{base64.b64encode(open(LOGO_PATH, "rb").read()).decode()}" 
+                         style="animation: pulse 1.5s infinite ease-in-out; width: 120px; height: auto;" />
+                    <h4 style="color: #1A3A8A; margin-top: 20px; font-weight: bold;">✨ Compiling Exam...</h4>
+                    <p style="color: #666; font-size: 15px;">Assembling {display_topic} structural modules.</p>
+                </div>
+                <style>
+                    /* THIS LINE HIDES THE DEFAULT STICK FIGURE COMPLETELY */
+                    [data-testid="stStatusWidget"] {{ display: none !important; }}
+
+                    @keyframes pulse {{
+                        0% {{ transform: scale(0.95); opacity: 0.6; }}
+                        50% {{ transform: scale(1.05); opacity: 1; }}
+                        100% {{ transform: scale(0.95); opacity: 0.6; }}
+                    }}
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        try:
+            # --- NEW RETRY LOGIC ---
+            max_retries = 3
+            out = None
+            for attempt in range(max_retries):
+                try:
+                    # 1. Decide if this subject needs live web access
+                    live_search_subjects = [
+                        "Business Studies",
+                        "Legal Studies",
+                        "Science",
+                    ]
+
+                    # ---> NEW: Token Limiter, Python Sandbox & SAFETY OVERRIDE <---
+                    from google.genai import types
+                    
+                    # Initialize the tool list with the Python Code Execution sandbox!
+                    active_tools = [types.Tool(code_execution=types.ToolCodeExecution())]
+                    
+                    if subject in live_search_subjects and use_live_search:
+                        active_tools.append(types.Tool(google_search=types.GoogleSearch()))
+                    
+                    # Override the hyper-sensitive safety filters to allow math terms like "Inequalities"
+                    gen_config = types.GenerateContentConfig(
+                        max_output_tokens=8192,
+                        tools=active_tools,
+                        safety_settings=[
+                            types.SafetySetting(
+                                category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                                threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                            ),
+                            types.SafetySetting(
+                                category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                                threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                            ),
+                            types.SafetySetting(
+                                category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                                threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                            ),
+                            types.SafetySetting(
+                                category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                                threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                            )
+                        ]
+                    )
+
+                    # ---> UPGRADED: Dual Payload Builder <---
+                    ai_payload = [prompt]
+
+                    # 1. Catch text-based copy-pasted questions
+                    if exemplar_questions.strip():
+                        ai_payload.append(f"\n\n[CLONE EXEMPLARS - TEXT INPUT]:\n{exemplar_questions}")
+
+                    # 2. Catch file/photo uploads
+                    if uploaded_photo is not None:
+                        if uploaded_photo.name.lower().endswith(".pdf"):
+                            reader = PdfReader(uploaded_photo)
+                            pdf_text = "\n".join(
+                                [page.extract_text() or "" for page in reader.pages]
+                            )
+                            ai_payload.append(f"\n\n[CLONE EXEMPLARS - ATTACHED PDF TEXT]:\n{pdf_text}")
+                        else:
+                            img_data = Image.open(uploaded_photo)
+                            ai_payload.append(img_data)
+
+                        # Inject a contextual instruction telling the AI to read the attachment
+                        ai_payload.append(
+                            "\n\n[ATTACHMENT INSTRUCTION]: A school document (image or PDF) has been attached. "
+                            "Analyze the attached document, extract the primary sub-topics, syllabus references, or question layouts, "
+                            "and generate matching practice questions strictly adhering to the distribution settings requested above."
+                        )
+
+                    # 3. Call the AI with a Multi-Tiered Fallback Queue
+                    models_to_try = [
+                        "gemini-3.5-flash",  # Tier 1: Blazing Fast & Cheap (First Choice)
+                        "gemini-2.5-flash",  # Tier 2: Highly Reliable Backup Flash
+                        "gemini-2.5-pro",    # Tier 3: Stable Bedrock (Ultimate Safety Net)
+                    ]
+
+                    response = None
+                    last_error = None
+
+                    for model_name in models_to_try:
+                        try:
+                            # ─── INVISIBLE RELAY ENGINE (2 PHASES) ───
+                            st.toast(f"🏃 {model_name}: Phase 1 (Generating Questions & Answers)...")
+                            p1_payload = ai_payload + ["\n\nPHASE 1 INSTRUCTION: You must now generate the exam questions AND the answer key. First, generate the questions between ===LATEX_CONTENT_START=== and ===LATEX_CONTENT_END===. Then, immediately generate the short answers between ===LATEX_ANSWERS_START=== and ===LATEX_ANSWERS_END===. Do not generate worked solutions yet."]
+                            res1 = client.models.generate_content(model=model_name, contents=p1_payload, config=gen_config)
+                            
+                            # ---> BULLETPROOF CHECK: Did it actually finish Phase 1? <---
+                            if not res1 or not res1.text or "LATEX_ANSWERS_END" not in res1.text:
+                                raise ValueError("Phase 1 returned truncated or empty text. Forcing retry...")
+                            
+                            st.toast(f"🏃 {model_name}: Phase 2 (Generating Worked Solutions)...")
+                            p2_payload = p1_payload + [res1.text, "\n\nPHASE 2 INSTRUCTION: Excellent. Finally, generate the step-by-step fully worked solutions for all questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===. Take your time and show all mathematical steps."]
+                            res2 = client.models.generate_content(model=model_name, contents=p2_payload, config=gen_config)
+                            
+                            # ---> BULLETPROOF CHECK: Did it actually finish Phase 2? <---
+                            if not res2 or not res2.text or "LATEX_SOLUTIONS_END" not in res2.text:
+                                raise ValueError("Phase 2 returned truncated or empty text. Forcing retry...")
+                            
+                            st.toast(f"✅ Success! Engine used: {model_name}")
+                            st.session_state.meta_model_used = model_name
+                            
+                            # Combine the relay batons and strip out any accidental markdown formatting!
+                            out = res1.text + "\n\n" + res2.text
+                            out = out.replace("```latex", "").replace("```", "")
+                            
+                            # Aggregate Token Tracking
+                            in_tok = 0
+                            out_tok = 0
+                            for r in [res1, res2]:
+                                if r.usage_metadata:
+                                    in_tok += getattr(r.usage_metadata, 'prompt_token_count', 0)
+                                    out_tok += getattr(r.usage_metadata, 'candidates_token_count', 0)
+                                    
+                            st.session_state.meta_input_tokens = in_tok
+                            st.session_state.meta_output_tokens = out_tok
+                            st.session_state.used_search = (subject in live_search_subjects and use_live_search)
+                            
+                            break  # Success! Break out of the fallback queue
+                        except Exception as e:
+                            last_error = e
+                            # ---> UPDATED: Now it catches our empty text error and pivots to the next model! <---
+                            if "503" in str(e) or "empty text" in str(e):
+                                st.toast(f"🚦 {model_name} hiccuped. Pivoting to next model...")
+                                continue
+                            else:
+                                raise e
+
+                    if not out:
+                        raise last_error
+
+                    break  # If successful, break out of the retry loop
+                except Exception as e:
+                    # ---> UPDATED: Now it catches our empty text error and retries the whole loop! <---
+                    if ("503" in str(e) or "empty text" in str(e)) and attempt < max_retries - 1:
+                        st.toast(
+                            f"AI Hiccup. Retrying automatically in 3 seconds... (Attempt {attempt + 1}/{max_retries})"
+                        )
+                        time.sleep(3)
+                        continue
+                    else:
+                        raise e
+
+            if not out:
+                raise Exception("Failed to generate content after multiple attempts.")
+            # --- END NEW RETRY LOGIC ---
+
+            # Flexible whitespace robust regex expressions search matching splitters
+            fn_m = re.search(
+                r"===?\s*FILENAME_START\s*===?(.*?)===?\s*FILENAME_END\s*===?",
+                out,
+                re.DOTALL | re.IGNORECASE,
+            )
+
+            # If it finds the AI name, clean it up. Otherwise, fall back to a safe default.
+            if fn_m and fn_m.group(1).strip():
+                ai_generated_name = re.sub(
+                    r"[^A-Za-z0-9_\-\(\) ]", "_", fn_m.group(1).strip()
+                )
+                clean_topic = ai_generated_name.replace("_", " ")
+
+                # Recalculate the set number for this brand new custom AI name!
+                current_set_number = get_next_set_number(
+                    subject, grades_string, actual_level, clean_topic
+                )
+                display_topic = f"{clean_topic} Set {current_set_number}"
+            else:
+                display_topic = f"{clean_topic} Set {current_set_number}"
+
+            # ---> UPGRADED: Forgiving "Salvage" Regex Extractors <---
+            # If the AI gets cut off and misses an END tag, this saves everything it wrote!
+            c_m = re.search(
+                r"===?\s*LATEX_CONTENT_START\s*===?(.*?)(?:===?\s*LATEX_CONTENT_END\s*===?|===?\s*LATEX_ANSWERS_START|$)",
+                out,
+                re.DOTALL | re.IGNORECASE,
+            )
+            a_m = re.search(
+                r"===?\s*LATEX_ANSWERS_START\s*===?(.*?)(?:===?\s*LATEX_ANSWERS_END\s*===?|===?\s*LATEX_SOLUTIONS_START|$)",
+                out,
+                re.DOTALL | re.IGNORECASE,
+            )
+            s_m = re.search(
+                r"===?\s*LATEX_SOLUTIONS_START\s*===?(.*?)(?:===?\s*LATEX_SOLUTIONS_END\s*===?|$)",
+                out,
+                re.DOTALL | re.IGNORECASE,
+            )
+
+            c_latex = inject_python_graphs(
+                sanitize_ai_latex(c_m.group(1).strip() if c_m else "Failed.")
+            )
+            a_latex = inject_python_graphs(
+                sanitize_ai_latex(a_m.group(1).strip() if a_m else "Failed.")
+            )
+            s_latex = inject_python_graphs(
+                sanitize_ai_latex(s_m.group(1).strip() if s_m else "Failed.")
+            )
+
+            marks = sum(
+                int(m)
+                for m in re.findall(r"\((\d+)\s*marks?\)", c_latex, re.IGNORECASE)
+            ) or (total_q * 2)
+            title = f"{grades_string} {subject}{level_text}".strip()
+
+            p_bytes, t_bytes, log = build_latex_pdf(
+                display_topic,
+                title,
+                c_latex,
+                a_latex,
+                s_latex,
+                marks,
+                int(marks * 1.5),
+            )
+            w_bytes = build_word_doc_pandoc(
+                c_latex,
+                a_latex,
+                s_latex,
+                display_topic,
+                title,
+                marks,
+                int(marks * 1.5),
+            )
+
+            st.session_state.update(
+                {
+                    "questions_text": c_latex,
+                    "answers_text": a_latex,
+                    "solutions_text": s_latex,
+                    "pdf_bytes": p_bytes,
+                    "tex_bytes": t_bytes,
+                    "word_bytes": w_bytes,
+                    "compiler_log": log,
+                    "meta_topic": clean_topic,
+                    "meta_subject": subject,
+                    "meta_year": grades_string,
+                    "meta_diff": actual_level,
+                    "meta_n": total_q,
+                    "meta_set": current_set_number,
+                    "display_topic": display_topic,
+                    "cloud_saved": False,
+                    "meta_mc": num_mc,
+                    "meta_easy": num_easy,
+                    "meta_med": num_med,
+                    "meta_hard": num_hard,
+                    "meta_xh": num_xh,
+                }
+            )
+
+            # Wipe out custom layout floating loader badge safely on termination
+            loading_placeholder.empty()
+
+        except Exception as e:
+            loading_placeholder.empty()
+            st.error(f"Error: {e}")
+
+if st.session_state.questions_text:
+    _t, _s, _y, _d, _set, _disp = (
+        st.session_state.meta_topic,
+        st.session_state.meta_subject,
+        st.session_state.meta_year,
+        st.session_state.meta_diff,
+        st.session_state.meta_set,
+        st.session_state.display_topic,
+    )
+
+    st.markdown("---")
+    lvl_str = f" {_d}" if _d else ""
+    st.markdown(f"### {_disp} ({_y}{lvl_str})")
+
+    # ---> NEW: Dynamic Pricing Calculator <---
+    if st.session_state.get("admin_pin") == "DA_ADMIN":
+        in_tok = st.session_state.meta_input_tokens or 0
+        out_tok = st.session_state.meta_output_tokens or 0
+        model_used = st.session_state.meta_model_used or "Unknown"
+
+        # Determine true pricing based on the engine used
+        if "flash" in model_used.lower():
+            # Flash is approx $0.075 per 1M in / $0.30 per 1M out
+            in_cost = (in_tok / 1_000_000) * 0.075
+            out_cost = (out_tok / 1_000_000) * 0.30
+        else:
+            # Pro models are approx $1.50 per 1M in / $6.00 per 1M out
+            in_cost = (in_tok / 1_000_000) * 1.50
+            out_cost = (out_tok / 1_000_000) * 6.00
+
+        search_cost = 0.014 if st.session_state.used_search else 0.00
+        total_cost = in_cost + out_cost + search_cost
+
+        search_badge = (
+            " &nbsp;&nbsp;|&nbsp;&nbsp; 🌍 *Live Web Search Grounding Applied*"
+            if st.session_state.used_search
+            else ""
+        )
+        st.caption(
+            f"**💸 True Generation Cost:** ${total_cost:.5f} &nbsp;&nbsp;|&nbsp;&nbsp; **Engine:** `{model_used}` &nbsp;&nbsp;|&nbsp;&nbsp; **Tokens:** {in_tok:,} In / {out_tok:,} Out{search_badge}"
+        )
+
+    if not st.session_state.cloud_saved:
+        if st.button("💾 Save Exam to Cloud Library", type="secondary"):
+            with st.spinner("☁️ Archiving to database..."):
+                save_result = save_to_supabase(
+                    _t,
+                    _s,
+                    _y,
+                    _d,
+                    _set,
+                    st.session_state.pdf_bytes,
+                    st.session_state.word_bytes,
+                    num_mc=st.session_state.meta_mc or 0,
+                    num_easy=st.session_state.meta_easy or 0,
+                    num_med=st.session_state.meta_med or 0,
+                    num_hard=st.session_state.meta_hard or 0,
+                    num_xh=st.session_state.meta_xh or 0,
+                )
+                if save_result is True:
+                    st.session_state.cloud_saved = True
+                    st.rerun()
+                else:
+                    st.error(f"⚠️ Cloud Save Blocked: {save_result}")
+    else:
+        st.success("✅ Exam successfully archived to Library!")
+
+    st.markdown("---")
+
+    if not st.session_state.pdf_bytes:
+        st.error("⚠️ **PDF Compiler Failed**")
+        with st.expander("🛠️ View Log"):
+            st.code(st.session_state.compiler_log, language="text")
+    else:
+        # High-performance PDF parsing engine using HTML5 canvas rendering
+        b64 = base64.b64encode(st.session_state.pdf_bytes).decode("utf-8")
+        
+        canvas_preview_html = f"""
+        <div id="pdf-container" style="height: 830px; overflow-y: auto; background-color: #525659; padding: 20px; border-radius: 8px; border: 1px solid #ccc;"></div>
+        
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+        <script>
+            const pdfData = atob("{b64}");
+            const pdfjsLib = window['pdfjs-dist/build/pdf'];
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+            const loadingTask = pdfjsLib.getDocument({{data: pdfData}});
+            loadingTask.promise.then(pdf => {{
+                const container = document.getElementById('pdf-container');
+                const canvases = [];
+                
+                for (let i = 1; i <= pdf.numPages; i++) {{
+                    const canvas = document.createElement('canvas');
+                    canvas.style.display = 'block';
+                    canvas.style.margin = '0 auto 20px auto';
+                    canvas.style.backgroundColor = '#ffffff';
+                    canvas.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
+                    container.appendChild(canvas);
+                    canvases.push(canvas);
+                }}
+                
+                for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {{
+                    pdf.getPage(pageNum).then(page => {{
+                        const scale = 1.3;
+                        const viewport = page.getViewport({{scale: scale}});
+                        const canvas = canvases[pageNum - 1];
+                        canvas.height = viewport.height;
+                        canvas.width = viewport.width;
+                        
+                        const context = canvas.getContext('2d');
+                        page.render({{canvasContext: context, viewport: viewport}});
+                    }});
+                }}
+            }}).catch(err => {{
+                document.getElementById('pdf-container').innerHTML = '<div style="color:white; text-align:center; padding-top:40px;">Rendering Preview Failed. Please use the download link below.</div>';
+            }});
+        </script>
+        """
+        import streamlit.components.v1 as components
+        components.html(canvas_preview_html, height=850)
+
+    # Build the distribution string for the local download filename
+    dist_parts = []
+    if st.session_state.meta_mc: dist_parts.append(f"{st.session_state.meta_mc} MC")
+    if st.session_state.meta_easy: dist_parts.append(f"{st.session_state.meta_easy} Easy")
+    if st.session_state.meta_med: dist_parts.append(f"{st.session_state.meta_med} Med")
+    if st.session_state.meta_hard: dist_parts.append(f"{st.session_state.meta_hard} Hard")
+    if st.session_state.meta_xh: dist_parts.append(f"{st.session_state.meta_xh} Ext Hard")
+    dist_str = f" ({', '.join(dist_parts)})" if dist_parts else ""
+
+    yr_short = _y.replace("Year ", "Yr")
+    lvl_part = f" {_d}" if _d else ""
+    safe_name = f"{_t.replace('/', '_')} Set {_set}{dist_str} - {yr_short} {_s}{lvl_part}"
+
+    dl1, dl2, dl3 = st.columns(3)
+    with dl1:
+        if st.session_state.pdf_bytes:
+            st.download_button(
+                "🔴 Download PDF",
+                data=st.session_state.pdf_bytes,
+                file_name=f"{safe_name}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                type="primary",
+            )
+    with dl2:
+        st.download_button(
+            "📜 Download LaTeX",
+            data=st.session_state.tex_bytes,
+            file_name=f"{safe_name}.tex",
+            use_container_width=True,
+        )
+    with dl3:
+        if st.session_state.word_bytes:
+            st.download_button(
+                "📄 Download Word Doc",
+                data=st.session_state.word_bytes,
+                file_name=f"{safe_name}.docx",
+                use_container_width=True,
+            )
