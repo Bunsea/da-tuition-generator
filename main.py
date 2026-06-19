@@ -911,10 +911,10 @@ CRITICAL EXCEPTIONS:
 - DO NOT use the Python tool for pure algebraic, calculus, or trigonometric topics (e.g., Parametrics, Inverse Functions, Polynomials, Integration). Evaluate symbolic algebra using your own internal reasoning.
 - DO NOT use the Python tool to solve Networks, Critical Path Analysis, Maximum Flow, or Geometry problems. Draw the TikZ diagrams and evaluate those structural networks purely using your internal reasoning.
 10. UNIFIED QUESTION CLONING RULE (CRITICAL): If the user provides text inside [CLONE EXEMPLARS] or attaches an image/PDF file, your primary objective shifts to reverse-engineering those target items. Analyze their mathematical mechanics, formatting phrasing, structural complexity, and cognitive depth. You MUST generate original, highly precise variations that test the exact same competency tier. Change numeric values, algebraic configurations, or contextual word scenarios so the output operates as a perfect parallel practice set. Do not clone formatting errors or unrelated headers.
-11. CRITICAL OUTPUT FORMAT: You must output ONLY the raw content (questions and answers). 
+11. CRITICAL OUTPUT FORMAT & NO COMMENTS: You must output ONLY the raw content. 
     - Do NOT generate \\documentclass, \\usepackage, \\begin{{document}}, \\end{{document}}, or \\geometry.
-    - If you include any preamble-style commands, the system will crash.
     - Provide raw LaTeX code that starts immediately with \\section* or \\begin{{enumerate}}.
+    - NEVER use the `%` symbol to write hidden code comments anywhere in your output. The system automatically escapes all `%` symbols, which will fatally crash `pgfplots` and `tikz` if placed inside option brackets like `[...]`. Only use `%` when writing actual mathematical percentages in the visible text.
 12. MANDATORY ENVIRONMENT CLOSING: Every single `\\begin{{enumerate}}`, `\\begin{{itemize}}`, `\\begin{{align*}}`, or `\\begin{{tikzpicture}}` MUST have a matching `\\end{{...}}` tag. You must meticulously check that no environments are left open, as an unclosed environment will fatally crash the compiler.
 {syllabus_ban}
 {auto_name_rule}
@@ -945,7 +945,7 @@ Whenever a question asks the student to "sketch" or "draw" a graph, you MUST pro
 - PREVENT DIMENSION ERRORS: When plotting rational functions or graphs with vertical asymptotes, you MUST restrict the vertical plotting domain to prevent "Dimension too large" LaTeX crashes. You must include `ymin=-10, ymax=10` (or appropriate limits) inside the \\begin{{axis}}[...] options, AND you must include `restrict y to domain=-15:15` inside the \\addplot[...] options to safely clip the asymptotes.
 - MANDATORY SEMICOLONS: Every single drawing command inside the axis environment MUST end with a semicolon (;). Do not forget the semicolon, or the LaTeX compiler will crash.
 - TIKZ LABELS AND ANCHORS SECURING: When creating labels or polar positioning elements in TikZ, you MUST use explicit standard syntax (e.g., label=90:{{$P_1$}}). NEVER use shorthand styles like [90:P_1] directly inside bracket options, as this will trigger a fatal pgfkeys compiler crash.
-- TIKZ SYNTAX CRASH PREVENTION: NEVER place raw text, descriptions, or unformatted comments directly inside a `\\draw` or `\\addplot` command path. If you need to add text to a diagram, you MUST use a properly formatted `\\node` at a specific coordinate (e.g., `\\node at (2,4) {{Text}};`). Do not use `%` comments to store data values inside the tikzpicture.
+- TIKZ SYNTAX CRASH PREVENTION: NEVER place raw text, descriptions, or unformatted comments directly inside a `\\draw` or `\\addplot` command path. If you need to add text to a diagram, you MUST use a properly formatted `\\node` at a specific coordinate (e.g., `\\node at (2,4) {{Text}};`). NEVER use `%` comments inside `\\begin{{axis}}[...]` or `\\begin{{tikzpicture}}` options.
 
 {custom_instructions_block}
 When instructed, your final combined output must follow this template structure exactly:
