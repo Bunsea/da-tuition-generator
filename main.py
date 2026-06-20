@@ -1,5 +1,6 @@
 import streamlit as st
 from google import genai
+from google.genai import types
 import os
 import io
 import re
@@ -7,6 +8,11 @@ import subprocess
 import base64
 import shutil
 import time
+import tempfile
+import uuid
+import logging
+import ast
+import operator as _op
 from urllib.parse import unquote
 from PIL import Image
 from datetime import datetime
@@ -20,7 +26,6 @@ except ImportError:
     def get_sydney_time(utc_string):
         if not utc_string:
             return "N/A"
-        # Parse Supabase ISO timestamp (handling 'Z' or offset strings)
         clean_ts = utc_string.replace("Z", "+00:00")
         dt_utc = datetime.fromisoformat(clean_ts)
         dt_sydney = dt_utc.astimezone(pytz.timezone("Australia/Sydney"))
@@ -63,6 +68,14 @@ _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOGO_PATH = os.path.join(_BASE_DIR, "assets", "logo.png")
 SAMPLES_DIR = os.path.join(_BASE_DIR, "samples")
 
+# ── LOGGING (so silent failures are at least visible in the server console) ───
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+_logger = logging.getLogger("da_tuition")
+
+
+def _log_error(context: str, exc: Exception) -> None:
+    _logger.warning("[%s] %s", context, exc)
+
 
 # ── SUPABASE CONNECTION ────────────────────────────────────────────────────────
 @st.cache_resource
@@ -90,7 +103,8 @@ def get_next_set_number(subject, year, diff, clean_topic):
             .execute()
         )
         return len(res.data) + 1
-    except:
+    except Exception as e:
+        _log_error("get_next_set_number", e)
         return 1
 
 
@@ -126,12 +140,12 @@ def save_to_supabase(
 
     yr_short = year.replace("Year ", "Yr")
     db_topic = f"{clean_topic} ({yr_short}) Set {set_num}{dist_str}"
-    
+
     level_map = {
         "Advanced": "Adv",
         "Extension": "Ext1",
         "Extension 2": "Ext2",
-        "Standard": "Std"
+        "Standard": "Std",
     }
 
     short_diff = level_map.get(diff, diff) if diff else ""
@@ -156,9 +170,7 @@ def save_to_supabase(
                     "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 },
             )
-            docx_url = supabase_client.storage.from_("exam-files").get_public_url(
-                docx_path
-            )
+            docx_url = supabase_client.storage.from_("exam-files").get_public_url(docx_path)
 
         data = {
             "subject": subject,
@@ -174,7 +186,7 @@ def save_to_supabase(
         return str(e)
 
 
-# ── NEW DYNAMIC FILE ENGINE ────────────────────────────────────────────────────
+# ── DYNAMIC FILE ENGINE ─────────────────────────────────────────────────────────
 def get_parent_path(year: str, subject: str, difficulty: str) -> str:
     if difficulty:
         diff_path = os.path.join(SAMPLES_DIR, year, subject, difficulty)
@@ -187,15 +199,11 @@ def get_parent_path(year: str, subject: str, difficulty: str) -> str:
 def get_available_topics(parent_path: str) -> list:
     if not os.path.exists(parent_path):
         return []
-    topics = [
-        d
-        for d in os.listdir(parent_path)
-        if os.path.isdir(os.path.join(parent_path, d))
-    ]
+    topics = [d for d in os.listdir(parent_path) if os.path.isdir(os.path.join(parent_path, d))]
     return sorted(topics)
 
 
-def _read_files_in_dir(directory: str, files_only=True) -> list:
+def _read_files_in_dir(directory: str) -> list:
     if not os.path.exists(directory):
         return []
     samples = []
@@ -206,18 +214,16 @@ def _read_files_in_dir(directory: str, files_only=True) -> list:
                 try:
                     with open(fpath, "r", errors="replace") as f:
                         samples.append(f.read())
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log_error(f"read_sample:{fpath}", e)
             elif fname.endswith(".pdf"):
                 try:
                     reader = PdfReader(fpath)
-                    pdf_text = "".join(
-                        [page.extract_text() or "" for page in reader.pages]
-                    )
+                    pdf_text = "".join([page.extract_text() or "" for page in reader.pages])
                     if pdf_text.strip():
                         samples.append(pdf_text)
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log_error(f"read_sample_pdf:{fpath}", e)
     return samples
 
 
@@ -244,7 +250,67 @@ def load_style_samples(year: str, subject: str, difficulty: str, topic: str) -> 
     return "\n\n---\n\n".join(samples), source_msg
 
 
-# ── UPGRADED MULTI-TYPE PYTHON GRAPHING ENGINE ─────────────────────────────────
+# ── SAFE MATH EXPRESSION EVALUATOR ─────────────────────────────────────────────
+# Evaluates AI-generated graph expressions (e.g. "sin(x) + 2") WITHOUT calling
+# Python's raw eval() on untrusted text. This walks the parsed AST and only
+# permits a fixed whitelist of operators, numeric constants, and named math
+# functions through. There is no way to reach attribute access, subscripting,
+# imports, or builtins via this path — unlike eval() with a stripped
+# __builtins__, which is a known-incomplete sandbox.
+class UnsafeExpressionError(Exception):
+    pass
+
+
+_ALLOWED_BINOPS = {
+    ast.Add: _op.add,
+    ast.Sub: _op.sub,
+    ast.Mult: _op.mul,
+    ast.Div: _op.truediv,
+    ast.Pow: _op.pow,
+    ast.Mod: _op.mod,
+    ast.FloorDiv: _op.floordiv,
+}
+_ALLOWED_UNARYOPS = {ast.UAdd: _op.pos, ast.USub: _op.neg}
+_ALLOWED_FUNCS = {
+    "sin": np.sin, "cos": np.cos, "tan": np.tan,
+    "arcsin": np.arcsin, "arccos": np.arccos, "arctan": np.arctan,
+    "sinh": np.sinh, "cosh": np.cosh, "tanh": np.tanh,
+    "exp": np.exp, "log": np.log, "log10": np.log10, "log2": np.log2,
+    "sqrt": np.sqrt, "abs": np.abs, "floor": np.floor, "ceil": np.ceil,
+}
+
+
+def _safe_eval_node(node, names):
+    if isinstance(node, ast.Expression):
+        return _safe_eval_node(node.body, names)
+    if isinstance(node, ast.BinOp) and type(node.op) in _ALLOWED_BINOPS:
+        return _ALLOWED_BINOPS[type(node.op)](
+            _safe_eval_node(node.left, names), _safe_eval_node(node.right, names)
+        )
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _ALLOWED_UNARYOPS:
+        return _ALLOWED_UNARYOPS[type(node.op)](_safe_eval_node(node.operand, names))
+    if isinstance(node, ast.Call):
+        if node.keywords or not isinstance(node.func, ast.Name) or node.func.id not in _ALLOWED_FUNCS:
+            fname = getattr(node.func, "id", "?")
+            raise UnsafeExpressionError(f"Function '{fname}' is not allowed.")
+        args = [_safe_eval_node(a, names) for a in node.args]
+        return _ALLOWED_FUNCS[node.func.id](*args)
+    if isinstance(node, ast.Name):
+        if node.id in names:
+            return names[node.id]
+        raise UnsafeExpressionError(f"Unknown variable '{node.id}'.")
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+    raise UnsafeExpressionError(f"Disallowed expression element: {type(node).__name__}")
+
+
+def safe_eval_math(expr_str: str, names: dict):
+    """Evaluate a simple math expression string against an AST whitelist."""
+    tree = ast.parse(expr_str, mode="eval")
+    return _safe_eval_node(tree, names)
+
+
+# ── PYTHON GRAPHING ENGINE ──────────────────────────────────────────────────────
 def parse_graph_spec(block: str) -> dict | None:
     data = {}
     for line in block.strip().split("\n"):
@@ -257,7 +323,7 @@ def parse_graph_spec(block: str) -> dict | None:
     def _f(k, default):
         try:
             return float(data[k])
-        except:
+        except Exception:
             return default
 
     g_type = data.get("type", "function")
@@ -301,19 +367,10 @@ def draw_function_graph(spec: dict) -> bytes | None:
             py_expr = raw.replace("^", "**")
             py_expr = re.sub(r"(\d)\s*\(", r"\1*(", py_expr)
             py_expr = re.sub(r"(\d)([a-df-wyzA-DF-WYZ])", r"\1*\2", py_expr)
-            for fn in [
-                "sin", "cos", "tan", "arcsin", "arccos", "arctan", "sinh",
-                "cosh", "tanh", "exp", "log", "log10", "log2", "sqrt", "abs",
-                "floor", "ceil",
-            ]:
-                py_expr = re.sub(rf"\b{fn}\b", f"np.{fn}", py_expr)
 
             x = np.linspace(xmin, xmax, 1000)
             with np.errstate(divide="ignore", invalid="ignore"):
-                y = eval(
-                    py_expr,
-                    {"x": x, "np": np, "e": np.e, "pi": np.pi, "__builtins__": {}},
-                )
+                y = safe_eval_math(py_expr, {"x": x, "pi": np.pi, "e": np.e})
             y = np.asarray(y, dtype=float)
 
             clip_val = max(abs(xmax - xmin) * 20, 200)
@@ -333,31 +390,20 @@ def draw_function_graph(spec: dict) -> bytes | None:
 
             raw = spec["expr"].strip()
             py_expr = raw.replace("^", "**")
-            for fn in ["sin", "cos", "tan", "exp", "log"]:
-                py_expr = re.sub(rf"\b{fn}\b", f"np.{fn}", py_expr)
 
             x_vals = np.linspace(xmin, xmax, 20)
             y_vals = np.linspace(ymin, ymax, 20)
             X, Y = np.meshgrid(x_vals, y_vals)
 
             with np.errstate(divide="ignore", invalid="ignore"):
-                dy = eval(
-                    py_expr,
-                    {
-                        "x": X, "y": Y, "np": np, "e": np.e, "pi": np.pi,
-                        "__builtins__": {},
-                    },
-                )
+                dy = safe_eval_math(py_expr, {"x": X, "y": Y, "pi": np.pi, "e": np.e})
 
             dx = np.ones_like(dy)
             norm = np.sqrt(dx**2 + dy**2)
             dx = dx / norm
             dy = dy / norm
 
-            ax.quiver(
-                X, Y, dx, dy, color=DA, headwidth=1, headlength=0,
-                pivot="middle", scale=30,
-            )
+            ax.quiver(X, Y, dx, dy, color=DA, headwidth=1, headlength=0, pivot="middle", scale=30)
 
         elif g_type == "normal":
             mean = float(spec["mean"])
@@ -376,8 +422,7 @@ def draw_function_graph(spec: dict) -> bytes | None:
             xmin, xmax = mean - 4 * std, mean + 4 * std
             auto_ymin, auto_ymax = 0, y.max() * 1.2
             ax.set_xticks(
-                [mean - 3 * std, mean - 2 * std, mean - std, mean,
-                 mean + std, mean + 2 * std, mean + 3 * std]
+                [mean - 3 * std, mean - 2 * std, mean - std, mean, mean + std, mean + 2 * std, mean + 3 * std]
             )
 
         ymin = float(spec["ymin"]) if spec.get("ymin") else auto_ymin
@@ -399,20 +444,24 @@ def draw_function_graph(spec: dict) -> bytes | None:
         buf.seek(0)
         return buf.getvalue()
     except Exception as e:
-        print(f"Graphing Error: {e}")
+        plt.close(fig)
+        _log_error("draw_function_graph", e)
         return None
 
 
-def inject_python_graphs(text: str) -> str:
+def inject_python_graphs(text: str, work_dir: str) -> str:
+    """Renders any GRAPH_START...GRAPH_END blocks into PNGs inside work_dir and
+    swaps them for \\includegraphics. Uses a random filename per graph so
+    repeated calls (content / answers / solutions) never collide."""
+    if not text:
+        return text
     segments = re.split(r"(GRAPH_START.*?GRAPH_END)", text, flags=re.DOTALL)
     out_text = ""
-    for i, seg in enumerate(segments):
+    for seg in segments:
         if seg.startswith("GRAPH_START"):
-            gspec = parse_graph_spec(
-                seg.replace("GRAPH_START", "").replace("GRAPH_END", "").strip()
-            )
+            gspec = parse_graph_spec(seg.replace("GRAPH_START", "").replace("GRAPH_END", "").strip())
             if gspec and (png_bytes := draw_function_graph(gspec)):
-                img_path = os.path.join(_BASE_DIR, f"temp_graph_{i}.png")
+                img_path = os.path.join(work_dir, f"graph_{uuid.uuid4().hex[:10]}.png")
                 with open(img_path, "wb") as f:
                     f.write(png_bytes)
                 img_url_path = img_path.replace(chr(92), "/")
@@ -431,6 +480,7 @@ _SAFE_AMP_ENV_RE = re.compile(
     re.DOTALL,
 )
 
+
 def _escape_bare_ampersands(text: str) -> str:
     parts = _SAFE_AMP_ENV_RE.split(text)
     out = []
@@ -440,6 +490,7 @@ def _escape_bare_ampersands(text: str) -> str:
         else:
             out.append(part)
     return "".join(out)
+
 
 def sanitize_ai_latex(text: str) -> str:
     text = re.sub(r"\\documentclass.*?\{.*?\}", "", text, flags=re.DOTALL)
@@ -454,19 +505,26 @@ def sanitize_ai_latex(text: str) -> str:
     return text.strip()
 
 
+def _contains_tikz(*texts) -> bool:
+    return any(t and "\\begin{tikzpicture}" in t for t in texts)
+
+
 # ── PANDOC & PDF BUILDERS ──────────────────────────────────────────────────────
-def build_word_doc_pandoc(content, answers, solutions, topic, header_title, total_marks, time_allowed):
-    work_dir = _BASE_DIR
-    tex_filename = os.path.join(work_dir, "temp_pandoc.tex")
-    docx_filename = os.path.join(work_dir, "temp_exam.docx")
+def build_word_doc_pandoc(content, answers, solutions, topic, header_title, total_marks, time_allowed, work_dir):
+    tex_filename = os.path.join(work_dir, "pandoc.tex")
+    docx_filename = os.path.join(work_dir, "exam.docx")
 
     def format_word(text):
-        if not text: return ""
+        if not text:
+            return ""
         text = re.sub(r"\\item\[\(([A-D])\)\]\s*", r"\n\n(\1) ", text)
         return text.replace(r"\begin{itemize}", "").replace(r"\end{itemize}", "")
 
-    # ---> UPGRADED: Conditional Solutions Formatting <---
-    solutions_section = f"\\newpage\n\\begin{{center}}\\Large \\textbf{{FULLY WORKED SOLUTIONS}}\\end{{center}}\\vspace{{0.2cm}}\\hrule\\vspace{{0.5cm}}\n{format_word(solutions)}" if solutions else ""
+    solutions_section = (
+        f"\\newpage\n\\begin{{center}}\\Large \\textbf{{FULLY WORKED SOLUTIONS}}\\end{{center}}\\vspace{{0.2cm}}\\hrule\\vspace{{0.5cm}}\n{format_word(solutions)}"
+        if solutions
+        else ""
+    )
 
     full_tex = f"""\\documentclass{{article}}
 \\usepackage{{amsmath, amssymb, graphicx, booktabs, array}}
@@ -493,8 +551,7 @@ def build_word_doc_pandoc(content, answers, solutions, topic, header_title, tota
 
     with open(tex_filename, "w", encoding="utf-8") as f:
         f.write(full_tex)
-    if os.path.exists(docx_filename):
-        os.remove(docx_filename)
+
     if not shutil.which("pandoc"):
         return None
 
@@ -507,23 +564,25 @@ def build_word_doc_pandoc(content, answers, solutions, topic, header_title, tota
             doc.save(docx_filename)
             with open(docx_filename, "rb") as f:
                 return f.read()
-    except:
-        pass
+    except Exception as e:
+        _log_error("build_word_doc_pandoc", e)
     return None
 
 
-def build_latex_pdf(display_topic, header_title, content, answers, solutions, total_marks, time_allowed):
-    work_dir = _BASE_DIR
-    filename = os.path.join(work_dir, "temp_exam.tex")
-    pdf_filename = os.path.join(work_dir, "temp_exam.pdf")
+def build_latex_pdf(display_topic, header_title, content, answers, solutions, total_marks, time_allowed, work_dir):
+    filename = os.path.join(work_dir, "exam.tex")
+    pdf_filename = os.path.join(work_dir, "exam.pdf")
     if os.path.exists(pdf_filename):
         os.remove(pdf_filename)
 
     safe_title = header_title.replace("&", r"\&").replace("%", r"\%").replace("$", r"\$").replace("_", r"\_")
     safe_topic = display_topic.replace("&", r"\&").replace("%", r"\%").replace("$", r"\$").replace("_", r"\_")
 
-    # ---> UPGRADED: Conditional Solutions Formatting <---
-    solutions_section = f"\\newpage\n\\begin{{center}}\\Large \\textbf{{FULLY WORKED SOLUTIONS}}\\end{{center}}\\vspace{{0.2cm}}\\hrule\\vspace{{0.4cm}}\n{solutions}" if solutions else ""
+    solutions_section = (
+        f"\\newpage\n\\begin{{center}}\\Large \\textbf{{FULLY WORKED SOLUTIONS}}\\end{{center}}\\vspace{{0.2cm}}\\hrule\\vspace{{0.4cm}}\n{solutions}"
+        if solutions
+        else ""
+    )
 
     tex_template = f"""\\documentclass[11pt,a4paper]{{article}}
 \\usepackage[margin=1.5cm]{{geometry}}
@@ -580,14 +639,108 @@ def build_latex_pdf(display_topic, header_title, content, answers, solutions, to
         return None, tex_bytes, "CRITICAL ERROR: 'pdflatex' not found."
 
     try:
-        proc = subprocess.run(["pdflatex", "-interaction=nonstopmode", "-halt-on-error", filename], cwd=work_dir, capture_output=True, text=True)
-        subprocess.run(["pdflatex", "-interaction=nonstopmode", "-halt-on-error", filename], cwd=work_dir, capture_output=True, text=True)
+        proc = subprocess.run(
+            ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", filename],
+            cwd=work_dir, capture_output=True, text=True,
+        )
+        subprocess.run(
+            ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", filename],
+            cwd=work_dir, capture_output=True, text=True,
+        )
         if os.path.exists(pdf_filename):
             with open(pdf_filename, "rb") as f:
                 return f.read(), tex_bytes, ""
         return None, tex_bytes, proc.stdout
     except Exception as e:
         return None, tex_bytes, str(e)
+
+
+# ── WORK-DIR ISOLATION (prevents concurrent users overwriting each other) ──────
+def _start_new_work_dir() -> str:
+    """Clean up any previous temp directory for this session and create a
+    fresh, uniquely-named one for this generation request."""
+    old = st.session_state.get("work_dir")
+    if old and os.path.isdir(old):
+        shutil.rmtree(old, ignore_errors=True)
+    new_dir = tempfile.mkdtemp(prefix="da_exam_")
+    st.session_state.work_dir = new_dir
+    return new_dir
+
+
+def _get_or_create_work_dir() -> str:
+    """Reuse the active work dir for this exam if it still exists (Phase 2
+    solutions rebuild); otherwise create a fresh one."""
+    wd = st.session_state.get("work_dir")
+    if wd and os.path.isdir(wd):
+        return wd
+    return _start_new_work_dir()
+
+
+def _render_exam_files(work_dir, display_topic, title, q_text, a_text, s_text, total_q):
+    """(Re)injects graphs fresh into work_dir and compiles the PDF + Word doc.
+    Safe to call more than once against the same work_dir (Phase 1, then again
+    once Phase 2 adds worked solutions)."""
+    c_final = inject_python_graphs(q_text, work_dir)
+    a_final = inject_python_graphs(a_text, work_dir)
+    s_final = inject_python_graphs(s_text, work_dir) if s_text else ""
+
+    marks = sum(int(m) for m in re.findall(r"\((\d+)\s*marks?\)", c_final, re.IGNORECASE)) or (total_q * 2)
+    time_allowed = int(marks * 1.5)
+
+    pdf_bytes, tex_bytes, log = build_latex_pdf(
+        display_topic, title, c_final, a_final, s_final, marks, time_allowed, work_dir
+    )
+
+    if _contains_tikz(c_final, a_final, s_final):
+        word_bytes, word_reason = None, "diagram"
+    elif not shutil.which("pandoc"):
+        word_bytes, word_reason = None, "pandoc_missing"
+    else:
+        word_bytes = build_word_doc_pandoc(c_final, a_final, s_final, display_topic, title, marks, time_allowed, work_dir)
+        word_reason = None if word_bytes else "build_failed"
+
+    return pdf_bytes, tex_bytes, word_bytes, log, word_reason
+
+
+# ── AI CALL HELPERS ─────────────────────────────────────────────────────────────
+MAX_OUTPUT_TOKENS = 32768  # Generous budget so larger question sets aren't silently truncated
+
+_RETRYABLE_MARKERS = (
+    "503", "500", "429", "404", "400", "unavailable", "overloaded",
+    "internal", "resource_exhausted", "not found", "empty text",
+    "truncated", "invalid_argument",
+)
+
+
+def _is_retryable(exc: Exception) -> bool:
+    s = str(exc).lower()
+    return any(marker in s for marker in _RETRYABLE_MARKERS)
+
+
+def friendly_error_message(exc: Exception) -> str:
+    """Translate a raw exception into a short, plain-English message for staff."""
+    msg = str(exc)
+    low = msg.lower()
+    if "api key" in low or "401" in msg or "permission" in low or "403" in msg:
+        return "The AI service rejected the request — the API key may be missing or invalid. Please contact tech support."
+    if "429" in msg or "resource_exhausted" in low or "quota" in low:
+        return "The AI service has temporarily hit its usage limit. Please wait a minute and try again."
+    if "503" in msg or "overloaded" in low or "unavailable" in low or "500" in msg or "internal" in low:
+        return "Google's AI servers are temporarily busy. Please wait a moment and click the button again."
+    if "timeout" in low or "timed out" in low:
+        return "The request took too long and timed out. Try reducing the number of questions and generating again."
+    if "truncated" in low or "empty text" in low:
+        return "The AI's response was incomplete — this usually happens when too many questions are requested at once. Try a smaller batch."
+    return "Something went wrong while generating the exam. Please try again, or contact tech support if this keeps happening."
+
+
+def _get_genai_client():
+    """Builds the Gemini client, stopping with a clear message if the key is missing."""
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        st.error("⚠️ The AI engine isn't configured (missing API key on the server). Please contact tech support before using the generator.")
+        st.stop()
+    return genai.Client(api_key=api_key)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -628,7 +781,8 @@ with col2:
         .massive-header { font-size: 35px !important; font-weight: 600 !important; color: #31333F !important; line-height: 1.2 !important; margin-bottom: 0px !important; }
         </style>
         <div class="massive-header">DA Tuition | NESA Question Generator</div>
-        """, unsafe_allow_html=True,
+        """,
+        unsafe_allow_html=True,
     )
 
 st.markdown("---")
@@ -642,6 +796,12 @@ with st.sidebar:
         st.info("Enter the password to access the generator.")
         st.stop()
     st.success("Access granted!")
+
+    # Quick diagnostic so deployment issues (missing pdflatex/pandoc) are obvious
+    _pdflatex_ok = shutil.which("pdflatex") is not None
+    _pandoc_ok = shutil.which("pandoc") is not None
+    st.caption(f"⚙️ LaTeX engine: {'✅' if _pdflatex_ok else '❌ missing'}  ·  Word export: {'✅' if _pandoc_ok else '❌ missing'}")
+
     st.markdown("---")
     app_mode = st.radio("App Mode", ["✨ Generator", "📚 Exam Library"])
     st.markdown("---")
@@ -669,66 +829,93 @@ if app_mode == "📚 Exam Library":
 
             st.markdown("### 🔍 Search, Filter & Sort")
             f_col1, f_col2, f_col3, f_col4 = st.columns(4)
-            with f_col1: filter_subject = st.selectbox("Subject", available_subjects)
-            with f_col2: filter_year = st.selectbox("Year Group", available_years)
+            with f_col1:
+                filter_subject = st.selectbox("Subject", available_subjects)
+            with f_col2:
+                filter_year = st.selectbox("Year Group", available_years)
 
-            temp_filtered = [ex for ex in all_exams if (filter_subject == "All" or ex.get("subject") == filter_subject) and (filter_year == "All" or ex.get("year_group") == filter_year)]
+            temp_filtered = [
+                ex for ex in all_exams
+                if (filter_subject == "All" or ex.get("subject") == filter_subject)
+                and (filter_year == "All" or ex.get("year_group") == filter_year)
+            ]
             available_topics = ["All"] + sorted(list(set([ex.get("topic", "").split(" (")[0] for ex in temp_filtered if ex.get("topic")])))
 
-            with f_col3: filter_topic = st.selectbox("Topic", available_topics)
-            with f_col4: sort_option = st.selectbox("Sort By", ["Date Added (Newest)", "Date Added (Oldest)", "Name (A-Z)", "Name (Z-A)"])
+            with f_col3:
+                filter_topic = st.selectbox("Topic", available_topics)
+            with f_col4:
+                sort_option = st.selectbox("Sort By", ["Date Added (Newest)", "Date Added (Oldest)", "Name (A-Z)", "Name (Z-A)"])
             st.markdown("---")
 
             filtered_exams = [ex for ex in temp_filtered if filter_topic == "All" or ex.get("topic", "").split(" (")[0] == filter_topic]
 
-            if sort_option == "Date Added (Newest)": filtered_exams.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-            elif sort_option == "Date Added (Oldest)": filtered_exams.sort(key=lambda x: x.get("created_at", ""))
-            elif sort_option == "Name (A-Z)": filtered_exams.sort(key=lambda x: x.get("topic", "").lower())
-            elif sort_option == "Name (Z-A)": filtered_exams.sort(key=lambda x: x.get("topic", "").lower(), reverse=True)
+            if sort_option == "Date Added (Newest)":
+                filtered_exams.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+            elif sort_option == "Date Added (Oldest)":
+                filtered_exams.sort(key=lambda x: x.get("created_at", ""))
+            elif sort_option == "Name (A-Z)":
+                filtered_exams.sort(key=lambda x: x.get("topic", "").lower())
+            elif sort_option == "Name (Z-A)":
+                filtered_exams.sort(key=lambda x: x.get("topic", "").lower(), reverse=True)
 
             if not filtered_exams:
                 st.info("No exams match your current filters.")
             else:
                 st.caption(f"Showing {len(filtered_exams)} exam(s)")
                 for exam in filtered_exams:
-                    lvl_str = f" {exam['difficulty']}" if exam.get("difficulty") else ""
-                    with st.expander(f"📝 {exam['topic']} ({exam['subject']} - {exam['year_group']}{lvl_str})"):
+                    lvl_str_lib = f" {exam['difficulty']}" if exam.get("difficulty") else ""
+                    with st.expander(f"📝 {exam['topic']} ({exam['subject']} - {exam['year_group']}{lvl_str_lib})"):
                         sydney_timestamp = get_sydney_time(exam.get("created_at", ""))
                         st.caption(f"📅 **Generated:** {sydney_timestamp}")
 
                         e_col1, e_col2, e_col3 = st.columns([2, 2, 1])
-                        if exam.get("pdf_url"): e_col1.markdown(f"[📥 Download PDF]({exam['pdf_url']})")
-                        if exam.get("docx_url"): e_col2.markdown(f"[📄 Download Word Doc]({exam['docx_url']})")
+                        if exam.get("pdf_url"):
+                            e_col1.markdown(f"[📥 Download PDF]({exam['pdf_url']})")
+                        if exam.get("docx_url"):
+                            e_col2.markdown(f"[📄 Download Word Doc]({exam['docx_url']})")
 
                         if e_col3.button("🗑️ Delete", key=f"del_{exam['id']}"):
                             with st.spinner("Deleting from Cloud..."):
                                 paths_to_delete = []
-                                if exam.get("pdf_url"): paths_to_delete.append(unquote(exam["pdf_url"].split("/exam-files/")[-1]))
-                                if exam.get("docx_url"): paths_to_delete.append(unquote(exam["docx_url"].split("/exam-files/")[-1]))
+                                if exam.get("pdf_url"):
+                                    paths_to_delete.append(unquote(exam["pdf_url"].split("/exam-files/")[-1]))
+                                if exam.get("docx_url"):
+                                    paths_to_delete.append(unquote(exam["docx_url"].split("/exam-files/")[-1]))
 
                                 if paths_to_delete:
-                                    try: supabase_client.storage.from_("exam-files").remove(paths_to_delete)
-                                    except: pass
+                                    try:
+                                        supabase_client.storage.from_("exam-files").remove(paths_to_delete)
+                                    except Exception as e:
+                                        _log_error("delete_storage_files", e)
                                 try:
                                     supabase_client.table("saved_exams").delete().eq("id", exam["id"]).execute()
                                     st.rerun()
                                 except Exception as e:
-                                    st.error(f"Failed to delete record: {e}")
+                                    st.error("⚠️ Couldn't delete this exam. Please try again or contact tech support.")
+                                    with st.expander("🛠️ Technical details"):
+                                        st.code(str(e))
 
     st.stop()
 
 # ── GENERATOR MODE ─────────────────────────────────────────────────────────────
 st.markdown("### 📝 Exam Details")
 c1, c2, c3 = st.columns(3)
-with c1: year_group = st.multiselect("Year", ["Year 7", "Year 8", "Year 9", "Year 10", "Year 11", "Year 12"])
-with c2: subject = st.selectbox("Subject", ["Maths", "English", "Biology", "Business Studies", "Chemistry", "Legal Studies", "Science"])
+with c1:
+    year_group = st.multiselect("Year", ["Year 7", "Year 8", "Year 9", "Year 10", "Year 11", "Year 12"])
+with c2:
+    subject = st.selectbox("Subject", ["Maths", "English", "Biology", "Business Studies", "Chemistry", "Legal Studies", "Science"])
 
 with c3:
     level_disabled = False
-    if subject == "Maths" and "Year 11" in year_group: level_opts = ["Standard", "Advanced", "Extension"]
-    elif subject == "Maths" and "Year 12" in year_group: level_opts = ["Standard", "Advanced", "Extension 1", "Extension 2"]
-    elif subject == "English" and ("Year 11" in year_group or "Year 12" in year_group): level_opts = ["Standard", "Advanced", "EALD", "Extension"]
-    else: level_opts = ["N/A"]; level_disabled = True
+    if subject == "Maths" and "Year 11" in year_group:
+        level_opts = ["Standard", "Advanced", "Extension"]
+    elif subject == "Maths" and "Year 12" in year_group:
+        level_opts = ["Standard", "Advanced", "Extension 1", "Extension 2"]
+    elif subject == "English" and ("Year 11" in year_group or "Year 12" in year_group):
+        level_opts = ["Standard", "Advanced", "EALD", "Extension"]
+    else:
+        level_opts = ["N/A"]
+        level_disabled = True
     level = st.selectbox("Level", level_opts, disabled=level_disabled)
 
 actual_level = "" if level == "N/A" else level
@@ -738,39 +925,50 @@ for y in year_group:
     p_path = get_parent_path(y, subject, actual_level)
     available_topics.extend(get_available_topics(p_path))
 
-available_topics = sorted(list(set(available_topics)), key=lambda x: [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', x)])
+available_topics = sorted(list(set(available_topics)), key=lambda x: [int(c) if c.isdigit() else c for c in re.split(r"(\d+)", x)])
 
 c4, c5 = st.columns([2, 2])
 with c4:
-    if available_topics: topic = st.multiselect("Topic", available_topics)
-    else: topic = st.text_input("Topic", placeholder="e.g. Algebra, Calculus")
+    if available_topics:
+        topic = st.multiselect("Topic", available_topics)
+    else:
+        topic = st.text_input("Topic", placeholder="e.g. Algebra, Calculus")
 with c5:
     sub_topic = st.text_input("Specific Sub-topic (Optional)", placeholder="e.g. Slope Fields")
 
-exemplar_questions = st.text_area("🧬 Question Cloner (Optional Text Input)", placeholder="Paste specific questions here. The AI will generate variations matching their exact style and difficulty!")
+exemplar_questions = st.text_area(
+    "🧬 Question Cloner (Optional Text Input)",
+    placeholder="Paste specific questions here. The AI will generate variations matching their exact style and difficulty!",
+)
 
 st.markdown("##### 📸 Or, Upload an Exam Notification / Worksheet Photo")
-uploaded_photo = st.file_uploader("Upload a picture of a school worksheet or exam notice to automatically extract the context", type=["png", "jpg", "jpeg", "pdf"])
+uploaded_photo = st.file_uploader(
+    "Upload a picture of a school worksheet or exam notice to automatically extract the context",
+    type=["png", "jpg", "jpeg", "pdf"],
+)
+st.caption("⚠️ Use your own past worksheets, or describe the style you want — avoid pasting or uploading questions copied verbatim from copyrighted textbooks or commercial exam banks.")
 
 st.markdown("### 📊 Question Distribution")
 dist_cols = st.columns(5)
 with dist_cols[0]:
     use_mc = st.checkbox("Multiple Choice", value=True)
-    num_mc = st.number_input("MC Qty", min_value=0, max_value=100, value=5, label_visibility="collapsed") if use_mc else 0
+    num_mc = st.number_input("MC Qty", min_value=0, max_value=30, value=5, label_visibility="collapsed") if use_mc else 0
 with dist_cols[1]:
     use_easy = st.checkbox("Easy", value=True)
-    num_easy = st.number_input("Easy Qty", min_value=0, max_value=100, value=5, label_visibility="collapsed") if use_easy else 0
+    num_easy = st.number_input("Easy Qty", min_value=0, max_value=30, value=5, label_visibility="collapsed") if use_easy else 0
 with dist_cols[2]:
     use_med = st.checkbox("Medium", value=True)
-    num_med = st.number_input("Med Qty", min_value=0, max_value=100, value=5, label_visibility="collapsed") if use_med else 0
+    num_med = st.number_input("Med Qty", min_value=0, max_value=30, value=5, label_visibility="collapsed") if use_med else 0
 with dist_cols[3]:
     use_hard = st.checkbox("Hard", value=False)
-    num_hard = st.number_input("Hard Qty", min_value=0, max_value=100, value=5, label_visibility="collapsed") if use_hard else 0
+    num_hard = st.number_input("Hard Qty", min_value=0, max_value=30, value=5, label_visibility="collapsed") if use_hard else 0
 with dist_cols[4]:
     use_xh = st.checkbox("Extremely Hard", value=False)
-    num_xh = st.number_input("Ext. Hard Qty", min_value=0, max_value=100, value=5, label_visibility="collapsed") if use_xh else 0
+    num_xh = st.number_input("Ext. Hard Qty", min_value=0, max_value=30, value=5, label_visibility="collapsed") if use_xh else 0
 
 total_q = num_mc + num_easy + num_med + num_hard + num_xh
+if total_q > 40:
+    st.warning(f"⚠️ {total_q} questions requested. Large batches (40+) are more likely to get cut off mid-way by the AI. Consider generating in a few smaller sets for the most reliable results.")
 
 st.markdown("### 🖨️ Format & Spacing")
 layout_mode = st.radio("Layout:", ["Worksheet (No working out space)", "Exam (Space for working out)"], horizontal=True, label_visibility="collapsed")
@@ -791,17 +989,20 @@ source_msg = "✅ " + " | ".join(msgs) if combined_samples else "❌ No samples 
 with st.sidebar:
     st.markdown("---")
     st.markdown("📂 **File Tracker**")
-    if "✅" in source_msg: st.success(source_msg)
-    elif "⚠️" in source_msg: st.warning(source_msg)
-    else: st.error(source_msg)
+    if "✅" in source_msg:
+        st.success(source_msg)
+    elif "⚠️" in source_msg:
+        st.warning(source_msg)
+    else:
+        st.error(source_msg)
     st.caption(f"Searching in: {', '.join(year_group) if year_group else 'None'}")
 
-# ---> UPGRADED: Added new State Variables for Progressive Disclosure <---
 _SS_KEYS = (
-    "questions_text", "answers_text", "solutions_text", "pdf_bytes", "tex_bytes", "word_bytes", "compiler_log", 
-    "meta_topic", "meta_subject", "meta_year", "meta_diff", "meta_n", "meta_set", "cloud_saved", "display_topic", 
-    "meta_mc", "meta_easy", "meta_med", "meta_hard", "meta_xh", "meta_input_tokens", "meta_output_tokens", 
-    "meta_model_used", "used_search", "phase_1_raw", "saved_ai_payload"
+    "questions_text", "answers_text", "solutions_text", "pdf_bytes", "tex_bytes", "word_bytes",
+    "word_skip_reason", "compiler_log", "meta_topic", "meta_subject", "meta_year", "meta_diff",
+    "meta_n", "meta_set", "cloud_saved", "display_topic", "meta_mc", "meta_easy", "meta_med",
+    "meta_hard", "meta_xh", "meta_input_tokens", "meta_output_tokens", "meta_model_used",
+    "used_search", "phase_1_raw", "saved_ai_payload", "work_dir",
 )
 for _key in _SS_KEYS:
     if _key not in st.session_state:
@@ -809,30 +1010,38 @@ for _key in _SS_KEYS:
 
 st.markdown("---")
 btn_col1, btn_col2 = st.columns([5, 1])
-with btn_col1: generate_btn = st.button("✨ It's go time!", type="primary", use_container_width=True)
+with btn_col1:
+    generate_btn = st.button("✨ It's go time!", type="primary", use_container_width=True)
 with btn_col2:
     if st.button("🗑 Clear", use_container_width=True):
-        for _key in _SS_KEYS: st.session_state[_key] = None
+        _old_wd = st.session_state.get("work_dir")
+        if _old_wd and os.path.isdir(_old_wd):
+            shutil.rmtree(_old_wd, ignore_errors=True)
+        for _key in _SS_KEYS:
+            st.session_state[_key] = None
         st.rerun()
 
 if generate_btn:
     is_topic_empty = not topic or (isinstance(topic, str) and not topic.strip())
-    if not year_group: st.error("🚨 Action Required: Please select at least one **Year** group from the dropdown above.")
-    elif is_topic_empty and uploaded_photo is None: st.error("🚨 Action Required: Please enter a **Topic**, or upload a photo for the AI to extract.")
-    elif total_q == 0: st.error("🚨 Action Required: Please select at least one question to generate.")
+    if not year_group:
+        st.error("🚨 Action Required: Please select at least one **Year** group from the dropdown above.")
+    elif is_topic_empty and uploaded_photo is None:
+        st.error("🚨 Action Required: Please enter a **Topic**, or upload a photo for the AI to extract.")
+    elif total_q == 0:
+        st.error("🚨 Action Required: Please select at least one question to generate.")
     else:
-        if is_topic_empty and uploaded_photo is not None: topic = ["Worksheet Extract"]
+        if is_topic_empty and uploaded_photo is not None:
+            topic = ["Worksheet Extract"]
 
-        api_key = os.environ.get("GEMINI_API_KEY")
-        client = genai.Client(api_key=api_key)
+        client = _get_genai_client()
 
         topic_list = topic if isinstance(topic, list) else [topic]
         clean_topic = ", ".join([re.sub(r"^\d+[\.\-]\s*", "", t).strip() for t in topic_list])
-        
+
         if sub_topic:
             safe_sub = sub_topic.replace("/", "-").replace("\\", "-")
             clean_topic = f"{clean_topic} - {safe_sub}"
-            
+
         grades_string = ", ".join(year_group)
         current_set_number = get_next_set_number(subject, grades_string, actual_level, clean_topic)
         display_topic = f"{clean_topic} Set {current_set_number}"
@@ -841,26 +1050,35 @@ if generate_btn:
         custom_instructions_block = f"EXTRA TUTOR INSTRUCTIONS:\n{extra_instructions}\n\n" if extra_instructions.strip() else ""
 
         dist_req = []
-        if num_mc > 0: dist_req.append(f"{num_mc} Multiple Choice questions")
+        if num_mc > 0:
+            dist_req.append(f"{num_mc} Multiple Choice questions")
         total_fr = num_easy + num_med + num_hard + num_xh
-        if num_easy > 0: dist_req.append(f"{num_easy} Easy Free-Response questions")
-        if num_med > 0: dist_req.append(f"{num_med} Medium Free-Response questions")
-        if num_hard > 0: dist_req.append(f"{num_hard} Hard Free-Response questions")
-        if num_xh > 0: dist_req.append(f"{num_xh} Extremely Hard Free-Response questions")
+        if num_easy > 0:
+            dist_req.append(f"{num_easy} Easy Free-Response questions")
+        if num_med > 0:
+            dist_req.append(f"{num_med} Medium Free-Response questions")
+        if num_hard > 0:
+            dist_req.append(f"{num_hard} Hard Free-Response questions")
+        if num_xh > 0:
+            dist_req.append(f"{num_xh} Extremely Hard Free-Response questions")
 
-        has_mc = num_mc > 0; has_fr = total_fr > 0
+        has_mc = num_mc > 0
+        has_fr = total_fr > 0
 
-        if "Exam" in layout_mode: layout_instruction = "CRITICAL SPACING RULE: Add `\\vspace*{4cm}` (or more) after EVERY Free-Response question and sub-question."
-        else: layout_instruction = "CRITICAL SPACING RULE: Add exactly `\\vspace{0.5cm}` after EVERY question and sub-question."
+        if "Exam" in layout_mode:
+            layout_instruction = "CRITICAL SPACING RULE: Add `\\vspace*{4cm}` (or more) after EVERY Free-Response question and sub-question."
+        else:
+            layout_instruction = "CRITICAL SPACING RULE: Add exactly `\\vspace{0.5cm}` after EVERY question and sub-question."
 
         exam_focus = f"{clean_topic}" + (f" - specifically focusing on: {sub_topic}" if sub_topic else "")
         level_text = f" {actual_level}" if actual_level else ""
 
-        template_f = ""; auto_name_rule = ""
+        template_f = ""
+        auto_name_rule = ""
         if uploaded_photo is not None:
             template_f = "===FILENAME_START===\nSchool_Subject_Year_Level_Topic\n===FILENAME_END===\n"
             auto_name_rule = "12. AUTO-NAMING: You MUST generate a precise file name based on the attached document. Format EXACTLY like this: School_Subject_Year_Level_Topic. Use underscores. Place inside ===FILENAME_START=== and ===FILENAME_END=== tags. CRITICAL: If there is no explicit school name, DO NOT guess or invent an acronym like 'SHS'. Simply omit the school entirely."
-        
+
         template_c = "===LATEX_CONTENT_START===\n"
         template_a = "===LATEX_ANSWERS_START===\n"
 
@@ -877,8 +1095,10 @@ if generate_btn:
         template_a += "===LATEX_ANSWERS_END==="
 
         strict_negatives = ""
-        if not has_fr: strict_negatives = "CRITICAL: DO NOT GENERATE ANY FREE-RESPONSE QUESTIONS OR A SECTION 2. ONLY GENERATE MULTIPLE CHOICE."
-        elif not has_mc: strict_negatives = "CRITICAL: DO NOT GENERATE ANY MULTIPLE CHOICE QUESTIONS."
+        if not has_fr:
+            strict_negatives = "CRITICAL: DO NOT GENERATE ANY FREE-RESPONSE QUESTIONS OR A SECTION 2. ONLY GENERATE MULTIPLE CHOICE."
+        elif not has_mc:
+            strict_negatives = "CRITICAL: DO NOT GENERATE ANY MULTIPLE CHOICE QUESTIONS."
 
         syllabus_ban = ""
         if subject == "Maths":
@@ -903,18 +1123,18 @@ EXAMINER RULES:
 3. SUB-QUESTIONS: Use a nested `\\begin{{enumerate}}` environment so they format as (a), (b), (c).
 4. ANSWERS PAGE: Do NOT use display math (`\\[ ... \\]` or `$$...$$`) for the answers. Use inline math (`$...$`) so all answers naturally align left.
 5. {layout_instruction}
-6. "MISSING \ITEM" CRASH PREVENTION: Immediately after starting a `\\begin{{enumerate}}` or `\\begin{{itemize}}`, the next command MUST be a valid `\\item` (e.g., `\\item` or `\\item[(A)]`). NEVER place `\\vspace`, text, or blank lines before the first item. Place all spacing commands AFTER the item text.
-7. SECTION TITLES: Name each section purely as "Section 1", "Section 2", etc. You MUST use the exact standard syntax `\\section*{{Section X}}`. CRITICAL: DO NOT add difficulty labels like "Easy Questions", "Medium Questions", or "Hard" to the section titles.
+6. "MISSING \\ITEM" CRASH PREVENTION: Immediately after starting a `\\begin{{enumerate}}` or `\\begin{{itemize}}`, the next command MUST be a valid `\\item` (e.g., `\\item` or `\\item[(A)]`). NEVER place `\\vspace`, text, or blank lines before the first item. Place all spacing commands AFTER the item text.
+7. SECTION TITLES: Name each section purely as "Section 1", "Section 2", etc. You MUST use the exact standard syntax `\\section*{{Section X}}`. NEVER invent undefined commands like `\\sectionsection`.
 8. MULTIPLE CHOICE: You MUST heavily randomize the correct answer options (A, B, C, D) across the multiple-choice section. The correct answer must NOT always be 'A'.
 9. PYTHON CALCULATOR SANDBOX (CRITICAL): You are equipped with a Python Code Execution tool. You MUST use it to calculate exact final decimal answers for strictly numeric topics like Financial Mathematics, Compound Interest, Annuities, or Statistics. 
 CRITICAL EXCEPTIONS: 
 - DO NOT use the Python tool for pure algebraic, calculus, or trigonometric topics (e.g., Parametrics, Inverse Functions, Polynomials, Integration). Evaluate symbolic algebra using your own internal reasoning.
 - DO NOT use the Python tool to solve Networks, Critical Path Analysis, Maximum Flow, or Geometry problems. Draw the TikZ diagrams and evaluate those structural networks purely using your internal reasoning.
 10. UNIFIED QUESTION CLONING RULE (CRITICAL): If the user provides text inside [CLONE EXEMPLARS] or attaches an image/PDF file, your primary objective shifts to reverse-engineering those target items. Analyze their mathematical mechanics, formatting phrasing, structural complexity, and cognitive depth. You MUST generate original, highly precise variations that test the exact same competency tier. Change numeric values, algebraic configurations, or contextual word scenarios so the output operates as a perfect parallel practice set. Do not clone formatting errors or unrelated headers.
-11. CRITICAL OUTPUT FORMAT & NO COMMENTS: You must output ONLY the raw content. 
+11. CRITICAL OUTPUT FORMAT: You must output ONLY the raw content (questions and answers). 
     - Do NOT generate \\documentclass, \\usepackage, \\begin{{document}}, \\end{{document}}, or \\geometry.
+    - If you include any preamble-style commands, the system will crash.
     - Provide raw LaTeX code that starts immediately with \\section* or \\begin{{enumerate}}.
-    - NEVER use the `%` symbol to write hidden code comments anywhere in your output. The system automatically escapes all `%` symbols, which will fatally crash `pgfplots` and `tikz` if placed inside option brackets like `[...]`. Only use `%` when writing actual mathematical percentages in the visible text.
 12. MANDATORY ENVIRONMENT CLOSING: Every single `\\begin{{enumerate}}`, `\\begin{{itemize}}`, `\\begin{{align*}}`, or `\\begin{{tikzpicture}}` MUST have a matching `\\end{{...}}` tag. You must meticulously check that no environments are left open, as an unclosed environment will fatally crash the compiler.
 {syllabus_ban}
 {auto_name_rule}
@@ -935,7 +1155,7 @@ ymax: 5
 GRAPH_END
 
 ENGINE 2: NATIVE TikZ
-Use this strictly for structural geometry: Networks, Critical Paths, 3D Trig diagrams, 3D Vectors, Forces/Inclined Planes, and Box Plots. The compiler has `\\usepackage{{tikz}}` installed (do NOT use pgfplots). Inject your `\\begin{{tikzpicture}}` code directly into the LaTeX output.
+Use this strictly for structural geometry: Networks, Critical Paths, 3D Trig diagrams, 3D Vectors, and Forces/Inclined Planes. The compiler has `\\usepackage{{tikz}}` installed (do NOT use pgfplots). Inject your `\\begin{{tikzpicture}}` code directly into the LaTeX output.
 
 CRITICAL GRAPHING REQUIREMENT:
 Whenever a question asks the student to "sketch" or "draw" a graph, you MUST provide the actual rendered graph in the Answers sections using the LaTeX `pgfplots` package. 
@@ -945,7 +1165,6 @@ Whenever a question asks the student to "sketch" or "draw" a graph, you MUST pro
 - PREVENT DIMENSION ERRORS: When plotting rational functions or graphs with vertical asymptotes, you MUST restrict the vertical plotting domain to prevent "Dimension too large" LaTeX crashes. You must include `ymin=-10, ymax=10` (or appropriate limits) inside the \\begin{{axis}}[...] options, AND you must include `restrict y to domain=-15:15` inside the \\addplot[...] options to safely clip the asymptotes.
 - MANDATORY SEMICOLONS: Every single drawing command inside the axis environment MUST end with a semicolon (;). Do not forget the semicolon, or the LaTeX compiler will crash.
 - TIKZ LABELS AND ANCHORS SECURING: When creating labels or polar positioning elements in TikZ, you MUST use explicit standard syntax (e.g., label=90:{{$P_1$}}). NEVER use shorthand styles like [90:P_1] directly inside bracket options, as this will trigger a fatal pgfkeys compiler crash.
-- TIKZ SYNTAX CRASH PREVENTION: NEVER place raw text, descriptions, or unformatted comments directly inside a `\\draw` or `\\addplot` command path. If you need to add text to a diagram, you MUST use a properly formatted `\\node` at a specific coordinate (e.g., `\\node at (2,4) {{Text}};`). NEVER use `%` comments inside `\\begin{{axis}}[...]` or `\\begin{{tikzpicture}}` options.
 
 {custom_instructions_block}
 When instructed, your final combined output must follow this template structure exactly:
@@ -961,8 +1180,10 @@ When instructed, your final combined output must follow this template structure 
             try:
                 logo_b64 = base64.b64encode(open(LOGO_PATH, "rb").read()).decode()
                 logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="animation: pulse 1.5s infinite ease-in-out; width: 120px; height: auto;" />'
-            except: logo_html = '<h1 style="font-size: 80px;">✨</h1>'
-        else: logo_html = '<h1 style="font-size: 80px;">✨</h1>'
+            except Exception:
+                logo_html = '<h1 style="font-size: 80px;">✨</h1>'
+        else:
+            logo_html = '<h1 style="font-size: 80px;">✨</h1>'
 
         loading_placeholder = st.empty()
         with loading_placeholder.container():
@@ -991,25 +1212,25 @@ When instructed, your final combined output must follow this template structure 
             for attempt in range(max_retries):
                 try:
                     live_search_subjects = ["Business Studies", "Legal Studies", "Science"]
-                    from google.genai import types
-                    
+
                     active_tools = [types.Tool(code_execution=types.ToolCodeExecution())]
                     if subject in live_search_subjects and use_live_search:
                         active_tools.append(types.Tool(google_search=types.GoogleSearch()))
-                    
+
                     gen_config = types.GenerateContentConfig(
-                        max_output_tokens=8192,
+                        max_output_tokens=MAX_OUTPUT_TOKENS,
                         tools=active_tools,
                         safety_settings=[
                             types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
                             types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
                             types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH)
-                        ]
+                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                        ],
                     )
 
                     ai_payload = [prompt]
-                    if exemplar_questions.strip(): ai_payload.append(f"\n\n[CLONE EXEMPLARS - TEXT INPUT]:\n{exemplar_questions}")
+                    if exemplar_questions.strip():
+                        ai_payload.append(f"\n\n[CLONE EXEMPLARS - TEXT INPUT]:\n{exemplar_questions}")
                     if uploaded_photo is not None:
                         if uploaded_photo.name.lower().endswith(".pdf"):
                             reader = PdfReader(uploaded_photo)
@@ -1020,45 +1241,40 @@ When instructed, your final combined output must follow this template structure 
                             ai_payload.append(img_data)
                         ai_payload.append("\n\n[ATTACHMENT INSTRUCTION]: Analyze the attached document and generate matching practice questions.")
 
-                    models_to_try = [
-                        "gemini-3.5-flash",  
-                        "gemini-2.5-flash",  
-                        "gemini-2.5-pro",    
-                    ]
-
+                    models_to_try = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-pro"]
                     last_error = None
 
                     for model_name in models_to_try:
                         try:
-                            # ---> UPGRADED: FASTER SINGLE-PHASE WORKFLOW <---
                             st.toast(f"🏃 {model_name}: Drafting Questions & Answers...")
-                            p1_payload = ai_payload + ["\n\nPHASE 1 INSTRUCTION: You must generate the exam questions AND the answer key. First, generate the questions between ===LATEX_CONTENT_START=== and ===LATEX_CONTENT_END===. Then, immediately generate the short answers between ===LATEX_ANSWERS_START=== and ===LATEX_ANSWERS_END===. Do NOT generate fully worked solutions."]
+                            p1_payload = ai_payload + [
+                                "\n\nPHASE 1 INSTRUCTION: You must generate the exam questions AND the answer key. First, generate the questions between ===LATEX_CONTENT_START=== and ===LATEX_CONTENT_END===. Then, immediately generate the short answers between ===LATEX_ANSWERS_START=== and ===LATEX_ANSWERS_END===. Do NOT generate fully worked solutions."
+                            ]
                             res1 = client.models.generate_content(model=model_name, contents=p1_payload, config=gen_config)
-                            
+
                             if not res1 or not res1.text or "LATEX_ANSWERS_END" not in res1.text:
                                 raise ValueError("Phase 1 returned truncated or empty text. Forcing retry...")
-                            
+
                             st.toast(f"✅ Preview Ready! Engine used: {model_name}")
                             st.session_state.meta_model_used = model_name
-                            
+
                             out = res1.text.replace("```latex", "").replace("```", "")
-                            
-                            # Save this exact context to memory for the optional solutions button!
+
                             st.session_state.phase_1_raw = out
                             st.session_state.saved_ai_payload = ai_payload
-                            
+
                             if res1.usage_metadata:
-                                st.session_state.meta_input_tokens = getattr(res1.usage_metadata, 'prompt_token_count', 0)
-                                st.session_state.meta_output_tokens = getattr(res1.usage_metadata, 'candidates_token_count', 0)
+                                st.session_state.meta_input_tokens = getattr(res1.usage_metadata, "prompt_token_count", 0)
+                                st.session_state.meta_output_tokens = getattr(res1.usage_metadata, "candidates_token_count", 0)
                             else:
                                 st.session_state.meta_input_tokens = 0
                                 st.session_state.meta_output_tokens = 0
-                                
+
                             st.session_state.used_search = (subject in live_search_subjects and use_live_search)
-                            break  
+                            break
                         except Exception as e:
                             last_error = e
-                            if "503" in str(e) or "empty text" in str(e) or "404" in str(e) or "not found" in str(e).lower():
+                            if _is_retryable(e):
                                 st.toast(f"🚦 {model_name} unavailable. Pivoting to next model...")
                                 continue
                             else:
@@ -1066,9 +1282,9 @@ When instructed, your final combined output must follow this template structure 
 
                     if not out:
                         raise last_error
-                    break  
+                    break
                 except Exception as e:
-                    if ("503" in str(e) or "empty text" in str(e) or "404" in str(e) or "not found" in str(e).lower()) and attempt < max_retries - 1:
+                    if _is_retryable(e) and attempt < max_retries - 1:
                         st.toast(f"AI Hiccup. Retrying automatically... (Attempt {attempt + 1}/{max_retries})")
                         time.sleep(3)
                         continue
@@ -1090,22 +1306,24 @@ When instructed, your final combined output must follow this template structure 
             c_m = re.search(r"===?\s*LATEX_CONTENT_START\s*===?(.*?)(?:===?\s*LATEX_CONTENT_END\s*===?|===?\s*LATEX_ANSWERS_START|$)", out, re.DOTALL | re.IGNORECASE)
             a_m = re.search(r"===?\s*LATEX_ANSWERS_START\s*===?(.*?)(?:===?\s*LATEX_ANSWERS_END\s*===?|$)", out, re.DOTALL | re.IGNORECASE)
 
-            c_latex = inject_python_graphs(sanitize_ai_latex(c_m.group(1).strip() if c_m else "Failed."))
-            a_latex = inject_python_graphs(sanitize_ai_latex(a_m.group(1).strip() if a_m else "Failed."))
+            q_sanitized = sanitize_ai_latex(c_m.group(1).strip() if c_m else "Failed.")
+            a_sanitized = sanitize_ai_latex(a_m.group(1).strip() if a_m else "Failed.")
 
-            marks = sum(int(m) for m in re.findall(r"\((\d+)\s*marks?\)", c_latex, re.IGNORECASE)) or (total_q * 2)
             title = f"{grades_string} {subject}{level_text}".strip()
+            work_dir = _start_new_work_dir()
 
-            p_bytes, t_bytes, log = build_latex_pdf(display_topic, title, c_latex, a_latex, "", marks, int(marks * 1.5))
-            w_bytes = build_word_doc_pandoc(c_latex, a_latex, "", display_topic, title, marks, int(marks * 1.5))
+            p_bytes, t_bytes, w_bytes, log, word_reason = _render_exam_files(
+                work_dir, display_topic, title, q_sanitized, a_sanitized, "", total_q
+            )
 
             st.session_state.update({
-                "questions_text": c_latex,
-                "answers_text": a_latex,
-                "solutions_text": "", # Empty for now!
+                "questions_text": q_sanitized,
+                "answers_text": a_sanitized,
+                "solutions_text": "",
                 "pdf_bytes": p_bytes,
                 "tex_bytes": t_bytes,
                 "word_bytes": w_bytes,
+                "word_skip_reason": word_reason,
                 "compiler_log": log,
                 "meta_topic": clean_topic,
                 "meta_subject": subject,
@@ -1126,7 +1344,9 @@ When instructed, your final combined output must follow this template structure 
 
         except Exception as e:
             loading_placeholder.empty()
-            st.error(f"Generation Error: {e}")
+            st.error(f"⚠️ {friendly_error_message(e)}")
+            with st.expander("🛠️ Technical details (for tech support)"):
+                st.code(str(e))
 
 if st.session_state.questions_text:
     _t, _s, _y, _d, _set, _disp = (
@@ -1158,80 +1378,86 @@ if st.session_state.questions_text:
         total_cost = in_cost + out_cost + search_cost
         search_badge = " &nbsp;&nbsp;|&nbsp;&nbsp; 🌍 *Live Web Search*" if st.session_state.used_search else ""
         st.caption(f"**💸 Generation Cost:** ${total_cost:.5f} &nbsp;&nbsp;|&nbsp;&nbsp; **Engine:** `{model_used}` &nbsp;&nbsp;|&nbsp;&nbsp; **Tokens:** {in_tok:,} In / {out_tok:,} Out{search_badge}")
+        st.caption("ℹ️ Per-token pricing above may drift from Google's current published rates — treat this as an estimate.")
 
-    # ---> UPGRADED: The Optional Solutions Generator Engine <---
     if not st.session_state.solutions_text:
         st.info("💡 **Preview Ready!** The Worksheet and Answer Key have been drafted. You can download them now, or generate the step-by-step solutions to append to the document.")
         if st.button("🧠 Generate Fully Worked Solutions", type="primary", use_container_width=True):
             with st.spinner("🤖 Calculating deep step-by-step mathematical solutions..."):
                 try:
-                    api_key = os.environ.get("GEMINI_API_KEY")
-                    client = genai.Client(api_key=api_key)
-                    
-                    from google.genai import types
+                    client = _get_genai_client()
+
                     active_tools = [types.Tool(code_execution=types.ToolCodeExecution())]
                     if st.session_state.used_search:
                         active_tools.append(types.Tool(google_search=types.GoogleSearch()))
-                    
+
                     gen_config = types.GenerateContentConfig(
-                        max_output_tokens=8192,
+                        max_output_tokens=MAX_OUTPUT_TOKENS,
                         tools=active_tools,
                         safety_settings=[
                             types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
                             types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
                             types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH)
-                        ]
+                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                        ],
                     )
 
-                    # Build the Phase 2 payload using the exact context it just generated
                     p2_payload = st.session_state.saved_ai_payload + [
-                        st.session_state.phase_1_raw, 
-                        "\n\nPHASE 2 INSTRUCTION: Excellent. Now, generate the step-by-step fully worked solutions for these EXACT questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===. Group trivial algebra. Show all key mathematical steps."
+                        st.session_state.phase_1_raw,
+                        "\n\nPHASE 2 INSTRUCTION: Excellent. Now, generate the step-by-step fully worked solutions for these EXACT questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===. Group trivial algebra. Show all key mathematical steps.",
                     ]
 
-                    # Loop through models again just in case the server is busy
                     models_to_try = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-pro"]
                     s_out = None
+                    last_error = None
                     for model_name in models_to_try:
                         try:
                             st.toast(f"🧠 {model_name}: Solving equations...")
                             res2 = client.models.generate_content(model=model_name, contents=p2_payload, config=gen_config)
-                            
+
                             if not res2 or not res2.text or "LATEX_SOLUTIONS_END" not in res2.text:
                                 raise ValueError("Solutions truncated. Retrying...")
-                            
+
                             s_out = res2.text.replace("```latex", "").replace("```", "")
-                            
+
                             if res2.usage_metadata:
-                                st.session_state.meta_input_tokens += getattr(res2.usage_metadata, 'prompt_token_count', 0)
-                                st.session_state.meta_output_tokens += getattr(res2.usage_metadata, 'candidates_token_count', 0)
+                                st.session_state.meta_input_tokens += getattr(res2.usage_metadata, "prompt_token_count", 0)
+                                st.session_state.meta_output_tokens += getattr(res2.usage_metadata, "candidates_token_count", 0)
                             break
                         except Exception as e:
-                            if "503" in str(e) or "empty text" in str(e) or "truncated" in str(e):
+                            last_error = e
+                            if _is_retryable(e):
                                 st.toast(f"🚦 {model_name} busy. Pivoting...")
                                 continue
-                            else: raise e
+                            else:
+                                raise e
 
                     if s_out:
                         s_m = re.search(r"===?\s*LATEX_SOLUTIONS_START\s*===?(.*?)(?:===?\s*LATEX_SOLUTIONS_END\s*===?|$)", s_out, re.DOTALL | re.IGNORECASE)
-                        s_latex = inject_python_graphs(sanitize_ai_latex(s_m.group(1).strip() if s_m else "Failed."))
-                        st.session_state.solutions_text = s_latex
+                        s_sanitized = sanitize_ai_latex(s_m.group(1).strip() if s_m else "Failed.")
+                        st.session_state.solutions_text = s_sanitized
 
-                        # Re-compile the document with the new solutions!
-                        marks = sum(int(m) for m in re.findall(r"\((\d+)\s*marks?\)", st.session_state.questions_text, re.IGNORECASE)) or (st.session_state.meta_n * 2)
                         title = f"{st.session_state.meta_year} {st.session_state.meta_subject}{lvl_str}".strip()
-                        p_bytes, t_bytes, log = build_latex_pdf(st.session_state.display_topic, title, st.session_state.questions_text, st.session_state.answers_text, s_latex, marks, int(marks * 1.5))
-                        w_bytes = build_word_doc_pandoc(st.session_state.questions_text, st.session_state.answers_text, s_latex, st.session_state.display_topic, title, marks, int(marks * 1.5))
-                        
+                        work_dir = _get_or_create_work_dir()
+
+                        p_bytes, t_bytes, w_bytes, log, word_reason = _render_exam_files(
+                            work_dir, st.session_state.display_topic, title,
+                            st.session_state.questions_text, st.session_state.answers_text, s_sanitized,
+                            st.session_state.meta_n,
+                        )
+
                         st.session_state.pdf_bytes = p_bytes
                         st.session_state.tex_bytes = t_bytes
                         st.session_state.word_bytes = w_bytes
+                        st.session_state.word_skip_reason = word_reason
+                        st.session_state.compiler_log = log
                         st.rerun()
                     else:
-                        st.error("⚠️ Failed to generate solutions due to high server demand. Please try again.")
+                        st.error(f"⚠️ {friendly_error_message(last_error or Exception('No response from the AI.'))}")
                 except Exception as e:
-                    st.error(f"Error generating solutions: {e}")
+                    st.error(f"⚠️ {friendly_error_message(e)}")
+                    with st.expander("🛠️ Technical details (for tech support)"):
+                        st.code(str(e))
 
     if not st.session_state.cloud_saved:
         if st.button("💾 Save Exam to Cloud Library", type="secondary"):
@@ -1246,7 +1472,9 @@ if st.session_state.questions_text:
                     st.session_state.cloud_saved = True
                     st.rerun()
                 else:
-                    st.error(f"⚠️ Cloud Save Blocked: {save_result}")
+                    st.error("⚠️ Couldn't save this exam to the cloud library. Please try again, or contact tech support if it keeps happening.")
+                    with st.expander("🛠️ Technical details (for tech support)"):
+                        st.code(str(save_result))
     else:
         st.success("✅ Exam successfully archived to Library!")
 
@@ -1293,11 +1521,16 @@ if st.session_state.questions_text:
         components.html(canvas_preview_html, height=850)
 
     dist_parts = []
-    if st.session_state.meta_mc: dist_parts.append(f"{st.session_state.meta_mc} MC")
-    if st.session_state.meta_easy: dist_parts.append(f"{st.session_state.meta_easy} Easy")
-    if st.session_state.meta_med: dist_parts.append(f"{st.session_state.meta_med} Med")
-    if st.session_state.meta_hard: dist_parts.append(f"{st.session_state.meta_hard} Hard")
-    if st.session_state.meta_xh: dist_parts.append(f"{st.session_state.meta_xh} Ext Hard")
+    if st.session_state.meta_mc:
+        dist_parts.append(f"{st.session_state.meta_mc} MC")
+    if st.session_state.meta_easy:
+        dist_parts.append(f"{st.session_state.meta_easy} Easy")
+    if st.session_state.meta_med:
+        dist_parts.append(f"{st.session_state.meta_med} Med")
+    if st.session_state.meta_hard:
+        dist_parts.append(f"{st.session_state.meta_hard} Hard")
+    if st.session_state.meta_xh:
+        dist_parts.append(f"{st.session_state.meta_xh} Ext Hard")
     dist_str = f" ({', '.join(dist_parts)})" if dist_parts else ""
 
     yr_short = _y.replace("Year ", "Yr")
@@ -1313,3 +1546,11 @@ if st.session_state.questions_text:
     with dl3:
         if st.session_state.word_bytes:
             st.download_button("📄 Download Word Doc", data=st.session_state.word_bytes, file_name=f"{safe_name}.docx", use_container_width=True)
+
+    _word_reason = st.session_state.get("word_skip_reason")
+    if _word_reason == "diagram":
+        st.caption("📄 Word Doc isn't available for this exam — it includes diagrams that don't convert cleanly to Word. Please use the PDF version.")
+    elif _word_reason == "pandoc_missing":
+        st.caption("📄 Word Doc export isn't set up on the server yet. Contact tech support to enable it.")
+    elif _word_reason == "build_failed":
+        st.caption("📄 Word Doc conversion failed for this exam. Please use the PDF version.")
