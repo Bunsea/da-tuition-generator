@@ -1108,12 +1108,22 @@ if generate_btn:
         elif not has_mc:
             strict_negatives = "CRITICAL: DO NOT GENERATE ANY MULTIPLE CHOICE QUESTIONS."
 
+        # ---> UPGRADED: Dynamic Syllabus, Level & YEAR Guardrails <---
         syllabus_ban = ""
         if subject == "Maths":
             ext_ban = ""
+            yr_ban = ""
+            
+            # Ban Extension topics for standard/advanced students
             if actual_level in ["Advanced", "Standard"]:
                 ext_ban = " CRITICAL: DO NOT include Extension 1 topics (e.g., Compound/Double Angles, Sum/Difference identities, t-formulae, Inverse Trig functions, Polynomial remainder theorem, or Combinatorics)."
-            syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {actual_level} syllabus. NEVER generate questions on obsolete topics (e.g., Locus, 3D Trigonometry, Perpendicular Distance, Angle of Inclination).{ext_ban}"
+            
+            # Ban Year 12 topics and manual calculations for Year 11 Standard students
+            if "Year 11" in year_group and "Year 12" not in year_group:
+                if actual_level == "Standard":
+                    yr_ban = " CRITICAL: DO NOT generate Year 12 Standard topics (e.g., Z-scores, Normal Distribution, Annuities, Depreciation, Critical Path Analysis, Networks, or Bivariate Data). DO NOT generate questions requiring manual calculation of standard deviation. DO NOT include Compound or Simple Interest questions."
+                    
+            syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {actual_level} syllabus. NEVER generate questions on obsolete topics (e.g., Locus, 3D Trigonometry, Perpendicular Distance, Angle of Inclination).{ext_ban}{yr_ban}"
 
         prompt = f"""You are a NESA Examiner.
 Generate an examination on "{exam_focus}" for {grades_string}{level_text} in {subject}.
