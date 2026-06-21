@@ -499,6 +499,14 @@ def sanitize_ai_latex(text: str) -> str:
     text = re.sub(r"\\begin\{document\}", "", text)
     text = re.sub(r"\\end\{document\}", "", text)
     text = re.sub(r"\\pagestyle\{.*?\}", "", text)
+    # Strip whole-line LaTeX comments (e.g. "% Original: y = |x^2-4|...").
+    # Models often leave these as scratch notes documenting transformations,
+    # plotted points, etc. If left in place, the blanket % -> \% escape below
+    # would turn them into literal printed text — and that text often contains
+    # ^ or _ outside math mode, which fatally crashes pdflatex. Removing full
+    # comment lines first means genuine comments just vanish (harmless),
+    # while real percent signs inside actual content still get escaped below.
+    text = re.sub(r"(?m)^[ \t]*%.*\n?", "", text)
     text = re.sub(r"\*\*(.*?)\*\*", r"\\textbf{\1}", text)
     text = re.sub(r"(?<!\\)%", r"\%", text)
     text = _escape_bare_ampersands(text)
