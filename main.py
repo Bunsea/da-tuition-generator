@@ -1118,10 +1118,12 @@ if generate_btn:
             if actual_level in ["Advanced", "Standard"]:
                 ext_ban = " CRITICAL: DO NOT include Extension 1 topics (e.g., Compound/Double Angles, Sum/Difference identities, t-formulae, Inverse Trig functions, Polynomial remainder theorem, or Combinatorics)."
             
-            # Ban Year 12 topics and manual calculations for Year 11 Standard students
+            # Ban Year 12 topics for Year 11 students
             if "Year 11" in year_group and "Year 12" not in year_group:
                 if actual_level == "Standard":
                     yr_ban = " CRITICAL: DO NOT generate Year 12 Standard topics (e.g., Z-scores, Normal Distribution, Annuities, Depreciation, Critical Path Analysis, Networks, or Bivariate Data). DO NOT generate questions requiring manual calculation of standard deviation. DO NOT include Compound or Simple Interest questions."
+                elif actual_level in ["Advanced", "Extension", "Extension 1"]:
+                    yr_ban = " CRITICAL: DO NOT generate Year 12 calculus applications. For Year 11, Logarithms and Exponentials are purely algebraic and basic graphical transformations. DO NOT ask for derivatives, stationary points, nature of turning points, points of inflection, or curve sketching using calculus. DO NOT include Year 12 Integration."
                     
             syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {actual_level} syllabus. NEVER generate questions on obsolete topics (e.g., Locus, 3D Trigonometry, Perpendicular Distance, Angle of Inclination).{ext_ban}{yr_ban}"
 
