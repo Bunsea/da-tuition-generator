@@ -1143,18 +1143,18 @@ EXAMINER RULES:
 3. SUB-QUESTIONS: Use a nested `\\begin{{enumerate}}` environment so they format as (a), (b), (c).
 4. ANSWERS PAGE: Do NOT use display math (`\\[ ... \\]` or `$$...$$`) for the answers. Use inline math (`$...$`) so all answers naturally align left.
 5. {layout_instruction}
-6. "MISSING \\ITEM" CRASH PREVENTION: Immediately after starting a `\\begin{{enumerate}}` or `\\begin{{itemize}}`, the next command MUST be a valid `\\item` (e.g., `\\item` or `\\item[(A)]`). NEVER place `\\vspace`, text, or blank lines before the first item. Place all spacing commands AFTER the item text.
-7. SECTION TITLES: Name each section purely as "Section 1", "Section 2", etc. You MUST use the exact standard syntax `\\section*{{Section X}}`. NEVER invent undefined commands like `\\sectionsection`.
+6. "MISSING \ITEM" CRASH PREVENTION: Immediately after starting a `\\begin{{enumerate}}` or `\\begin{{itemize}}`, the next command MUST be a valid `\\item` (e.g., `\\item` or `\\item[(A)]`). NEVER place `\\vspace`, text, or blank lines before the first item. Place all spacing commands AFTER the item text.
+7. SECTION TITLES: Name each section purely as "Section 1", "Section 2", etc. You MUST use the exact standard syntax `\\section*{{Section X}}`. CRITICAL: DO NOT add difficulty labels like "Easy Questions", "Medium Questions", or "Hard" to the section titles.
 8. MULTIPLE CHOICE: You MUST heavily randomize the correct answer options (A, B, C, D) across the multiple-choice section. The correct answer must NOT always be 'A'.
 9. PYTHON CALCULATOR SANDBOX (CRITICAL): You are equipped with a Python Code Execution tool. You MUST use it to calculate exact final decimal answers for strictly numeric topics like Financial Mathematics, Compound Interest, Annuities, or Statistics. 
 CRITICAL EXCEPTIONS: 
 - DO NOT use the Python tool for pure algebraic, calculus, or trigonometric topics (e.g., Parametrics, Inverse Functions, Polynomials, Integration). Evaluate symbolic algebra using your own internal reasoning.
 - DO NOT use the Python tool to solve Networks, Critical Path Analysis, Maximum Flow, or Geometry problems. Draw the TikZ diagrams and evaluate those structural networks purely using your internal reasoning.
 10. UNIFIED QUESTION CLONING RULE (CRITICAL): If the user provides text inside [CLONE EXEMPLARS] or attaches an image/PDF file, your primary objective shifts to reverse-engineering those target items. Analyze their mathematical mechanics, formatting phrasing, structural complexity, and cognitive depth. You MUST generate original, highly precise variations that test the exact same competency tier. Change numeric values, algebraic configurations, or contextual word scenarios so the output operates as a perfect parallel practice set. Do not clone formatting errors or unrelated headers.
-11. CRITICAL OUTPUT FORMAT: You must output ONLY the raw content (questions and answers). 
+11. CRITICAL OUTPUT FORMAT & NO COMMENTS: You must output ONLY the raw content. 
     - Do NOT generate \\documentclass, \\usepackage, \\begin{{document}}, \\end{{document}}, or \\geometry.
-    - If you include any preamble-style commands, the system will crash.
     - Provide raw LaTeX code that starts immediately with \\section* or \\begin{{enumerate}}.
+    - NEVER use the `%` symbol to write hidden code comments (e.g. `% Vertex` or `% Graph starts here`). The system automatically escapes all `%` symbols into `\\%`, so if you place them inside option brackets or coordinate lists, the `pgfplots` compiler will fatally crash trying to read them as math. Only use `%` for actual mathematical percentages (e.g., 50%).
 12. MANDATORY ENVIRONMENT CLOSING: Every single `\\begin{{enumerate}}`, `\\begin{{itemize}}`, `\\begin{{align*}}`, or `\\begin{{tikzpicture}}` MUST have a matching `\\end{{...}}` tag. You must meticulously check that no environments are left open, as an unclosed environment will fatally crash the compiler.
 {syllabus_ban}
 {auto_name_rule}
@@ -1175,7 +1175,7 @@ ymax: 5
 GRAPH_END
 
 ENGINE 2: NATIVE TikZ
-Use this strictly for structural geometry: Networks, Critical Paths, 3D Trig diagrams, 3D Vectors, and Forces/Inclined Planes. The compiler has `\\usepackage{{tikz}}` installed (do NOT use pgfplots). Inject your `\\begin{{tikzpicture}}` code directly into the LaTeX output.
+Use this strictly for structural geometry: Networks, Critical Paths, 3D Trig diagrams, 3D Vectors, Forces/Inclined Planes, and Box Plots. The compiler has `\\usepackage{{tikz}}` installed (do NOT use pgfplots). Inject your `\\begin{{tikzpicture}}` code directly into the LaTeX output.
 
 CRITICAL GRAPHING REQUIREMENT:
 Whenever a question asks the student to "sketch" or "draw" a graph, you MUST provide the actual rendered graph in the Answers sections using the LaTeX `pgfplots` package. 
@@ -1185,6 +1185,8 @@ Whenever a question asks the student to "sketch" or "draw" a graph, you MUST pro
 - PREVENT DIMENSION ERRORS: When plotting rational functions or graphs with vertical asymptotes, you MUST restrict the vertical plotting domain to prevent "Dimension too large" LaTeX crashes. You must include `ymin=-10, ymax=10` (or appropriate limits) inside the \\begin{{axis}}[...] options, AND you must include `restrict y to domain=-15:15` inside the \\addplot[...] options to safely clip the asymptotes.
 - MANDATORY SEMICOLONS: Every single drawing command inside the axis environment MUST end with a semicolon (;). Do not forget the semicolon, or the LaTeX compiler will crash.
 - TIKZ LABELS AND ANCHORS SECURING: When creating labels or polar positioning elements in TikZ, you MUST use explicit standard syntax (e.g., label=90:{{$P_1$}}). NEVER use shorthand styles like [90:P_1] directly inside bracket options, as this will trigger a fatal pgfkeys compiler crash.
+- TIKZ SYNTAX CRASH PREVENTION: NEVER place raw text, descriptions, or unformatted comments directly inside a `\\draw` or `\\addplot` command path. If you need to add text to a diagram, you MUST use a properly formatted `\\node` at a specific coordinate (e.g., `\\node at (2,4) {{Text}};`).
+- STRICT COORDINATE FORMATTING (CRITICAL): When listing points in `\\addplot coordinates {{...}};`, you MUST ONLY output the raw coordinate pairs. NEVER add text, labels, or `%` comments next to the points. For example, writing `(0,5) % Y-intercept` or `(2,9) % Vertex` will fatally crash the compiler. Output only the pure coordinates: `(0,5) (2,9) (5,0)`.
 
 {custom_instructions_block}
 When instructed, your final combined output must follow this template structure exactly:
