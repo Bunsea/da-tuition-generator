@@ -1263,7 +1263,7 @@ When instructed, your final combined output must follow this template structure 
                             ai_payload.append(img_data)
                         ai_payload.append("\n\n[ATTACHMENT INSTRUCTION]: Analyze the attached document and generate matching practice questions.")
 
-                    models_to_try = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-pro"]
+                    models_to_try = ["gemini-3.5-flash", "gemini-2.5-flash"]
                     last_error = None
 
                     for model_name in models_to_try:
@@ -1429,7 +1429,7 @@ if st.session_state.questions_text:
                         "\n\nPHASE 2 INSTRUCTION: Excellent. Now, generate the step-by-step fully worked solutions for these EXACT questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===. Group trivial algebra. Show all key mathematical steps.",
                     ]
 
-                    models_to_try = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-pro"]
+                    models_to_try = ["gemini-3.5-flash", "gemini-2.5-flash"]
                     s_out = None
                     last_error = None
                     for model_name in models_to_try:
