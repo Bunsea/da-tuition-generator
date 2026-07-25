@@ -1263,7 +1263,7 @@ When instructed, your final combined output must follow this template structure 
                             ai_payload.append(img_data)
                         ai_payload.append("\n\n[ATTACHMENT INSTRUCTION]: Analyze the attached document and generate matching practice questions.")
 
-                    models_to_try = ["gemini-3.5-flash", "gemini-2.5-flash"]
+                    models_to_try = ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash"]
                     last_error = None
 
                     for model_name in models_to_try:
