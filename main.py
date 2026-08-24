@@ -836,17 +836,24 @@ if app_mode == "📚 Exam Library":
             available_years = ["All"] + sorted(list(set([ex["year_group"] for ex in all_exams if ex.get("year_group")])))
 
             st.markdown("### 🔍 Search, Filter & Sort")
+            
+            # --- NEW SEARCH BAR ---
+            search_query = st.text_input("Search exams by keyword...", placeholder="Type to search topics, subjects, or levels...", label_visibility="collapsed")
+            
             f_col1, f_col2, f_col3, f_col4 = st.columns(4)
             with f_col1:
                 filter_subject = st.selectbox("Subject", available_subjects)
             with f_col2:
                 filter_year = st.selectbox("Year Group", available_years)
 
+            # --- UPDATED FILTER LOGIC ---
             temp_filtered = [
                 ex for ex in all_exams
                 if (filter_subject == "All" or ex.get("subject") == filter_subject)
                 and (filter_year == "All" or ex.get("year_group") == filter_year)
+                and (not search_query or search_query.lower() in ex.get("topic", "").lower() or search_query.lower() in ex.get("subject", "").lower())
             ]
+            
             available_topics = ["All"] + sorted(list(set([ex.get("topic", "").split(" (")[0] for ex in temp_filtered if ex.get("topic")])))
 
             with f_col3:
