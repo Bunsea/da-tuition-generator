@@ -546,15 +546,22 @@ def sanitize_ai_latex(text: str) -> str:
     # Fix markdown bold **text** -> \textbf{text}
     text = re.sub(r"\*\*(.*?)\*\*", r"\\textbf{\1}", text)
 
-    # Fix malformed environment delimiters / AI typos:
-    # 1. \begin{env> or \end{env> or \begin{env) or \end{env) or \begin{env] or \end{env]
-    text = re.sub(r"\\(begin|end)\{([a-zA-Z*]+)[>\]\)]", r"\\\1{\2}", text)
-    # 2. \begin[env] or \end[env] -> \begin{env} or \end{env}
+    # Fix any command arguments where '{...>' was written instead of '{...}' (e.g., \vspace{0.5cm>, \textbf{text>, \frac{a>{b>)
+    for _ in range(3):
+        text = re.sub(r"(\\[a-zA-Z*]+(?:\[[^\]\n]*\])?(?:\{[^{}\n]*\})*)\{([^{}\n]*?)>", r"\1{\2}", text)
+
+    # Fix \begin[env] / \end[env] or \begin(env) / \end(env)
     text = re.sub(r"\\(begin|end)\[([a-zA-Z*]+)\]", r"\\\1{\2}", text)
-    # 3. \begin(env) or \end(env) -> \begin{env} or \end{env}
     text = re.sub(r"\\(begin|end)\(([a-zA-Z*]+)\)", r"\\\1{\2}", text)
-    # 4. \begin{env or \end{env followed by whitespace/newline without closing brace
-    text = re.sub(r"\\(begin|end)\{([a-zA-Z*]+)(?=[ \t\n\r])", r"\\\1{\2}", text)
+
+    # Fix \begin{env> / \end{env> / \begin{env) / \end{env)
+    text = re.sub(r"\\(begin|end)\{([a-zA-Z*]+)[>\]\)]", r"\\\1{\2}", text)
+
+    # Fix commands where closing brace was omitted at end of line (e.g. \vspace{0.5cm)
+    text = re.sub(r"(\\(?:vspace\*?|hspace\*?|rule|label|ref|textbf|textit|mathbf|bm|vec|hat|underline))\{([a-zA-Z0-9\.\-\_\s]+)(?=[ \t]*[\n\r]|$)", r"\1{\2}", text)
+
+    # Fix \item[(A)>] or \item[(A)]> or \item[(A)>
+    text = re.sub(r"\\item\[\(([A-Za-z0-9]+)\)[>\]\)]*", r"\\item[(\1)]", text)
 
     # Fix "Missing \item" if \vspace appears immediately after \begin{enumerate} or \begin{itemize}
     text = re.sub(r"(\\begin\{(?:enumerate|itemize)\})\s*\\vspace\*?\{[^}]+\}\s*", r"\1\n", text)
