@@ -121,9 +121,10 @@ def save_to_supabase(
     num_med=0,
     num_hard=0,
     num_xh=0,
+    existing_id=None,
 ):
     if not supabase_client:
-        return "Supabase is not connected. Missing URL or Key."
+        return False, "Supabase is not connected. Missing URL or Key."
 
     dist_parts = []
     if num_mc:
@@ -157,9 +158,12 @@ def save_to_supabase(
 
     try:
         supabase_client.storage.from_("exam-files").upload(
-            pdf_path, pdf_bytes, {"content-type": "application/pdf"}
+            pdf_path,
+            pdf_bytes,
+            {"content-type": "application/pdf", "upsert": "true"},
         )
-        pdf_url = supabase_client.storage.from_("exam-files").get_public_url(pdf_path)
+        base_pdf_url = supabase_client.storage.from_("exam-files").get_public_url(pdf_path)
+        pdf_url = f"{base_pdf_url}?t={int(time.time())}"
 
         docx_url = ""
         if word_bytes:
@@ -167,10 +171,12 @@ def save_to_supabase(
                 docx_path,
                 word_bytes,
                 {
-                    "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "upsert": "true",
                 },
             )
-            docx_url = supabase_client.storage.from_("exam-files").get_public_url(docx_path)
+            base_docx_url = supabase_client.storage.from_("exam-files").get_public_url(docx_path)
+            docx_url = f"{base_docx_url}?t={int(time.time())}"
 
         data = {
             "subject": subject,
@@ -180,10 +186,35 @@ def save_to_supabase(
             "pdf_url": pdf_url,
             "docx_url": docx_url,
         }
-        supabase_client.table("saved_exams").insert(data).execute()
-        return True
+
+        if existing_id:
+            supabase_client.table("saved_exams").update(data).eq("id", existing_id).execute()
+            return True, existing_id
+        else:
+            try:
+                existing_match = (
+                    supabase_client.table("saved_exams")
+                    .select("id")
+                    .eq("subject", subject)
+                    .eq("year_group", year)
+                    .eq("difficulty", diff)
+                    .eq("topic", db_topic)
+                    .execute()
+                )
+                if existing_match.data and len(existing_match.data) > 0:
+                    matched_id = existing_match.data[0]["id"]
+                    supabase_client.table("saved_exams").update(data).eq("id", matched_id).execute()
+                    return True, matched_id
+            except Exception as e:
+                _log_error("check_existing_match", e)
+
+            res = supabase_client.table("saved_exams").insert(data).execute()
+            saved_id = None
+            if res.data and len(res.data) > 0 and "id" in res.data[0]:
+                saved_id = res.data[0]["id"]
+            return True, saved_id
     except Exception as e:
-        return str(e)
+        return False, str(e)
 
 
 # ── DYNAMIC FILE ENGINE ─────────────────────────────────────────────────────────
@@ -893,9 +924,9 @@ if app_mode == "📚 Exam Library":
                             with st.spinner("Deleting from Cloud..."):
                                 paths_to_delete = []
                                 if exam.get("pdf_url"):
-                                    paths_to_delete.append(unquote(exam["pdf_url"].split("/exam-files/")[-1]))
+                                    paths_to_delete.append(unquote(exam["pdf_url"].split("/exam-files/")[-1].split("?")[0]))
                                 if exam.get("docx_url"):
-                                    paths_to_delete.append(unquote(exam["docx_url"].split("/exam-files/")[-1]))
+                                    paths_to_delete.append(unquote(exam["docx_url"].split("/exam-files/")[-1].split("?")[0]))
 
                                 if paths_to_delete:
                                     try:
@@ -1018,6 +1049,7 @@ _SS_KEYS = (
     "meta_n", "meta_set", "cloud_saved", "display_topic", "meta_mc", "meta_easy", "meta_med",
     "meta_hard", "meta_xh", "meta_input_tokens", "meta_output_tokens", "meta_model_used",
     "used_search", "phase_1_raw", "saved_ai_payload", "work_dir",
+    "saved_exam_id", "saved_has_solutions",
 )
 for _key in _SS_KEYS:
     if _key not in st.session_state:
@@ -1362,6 +1394,8 @@ When instructed, your final combined output must follow this template structure 
                 "meta_set": current_set_number,
                 "display_topic": display_topic,
                 "cloud_saved": False,
+                "saved_exam_id": None,
+                "saved_has_solutions": False,
                 "meta_mc": num_mc,
                 "meta_easy": num_easy,
                 "meta_med": num_med,
@@ -1488,24 +1522,53 @@ if st.session_state.questions_text:
                     with st.expander("🛠️ Technical details (for tech support)"):
                         st.code(str(e))
 
+    # ── CLOUD LIBRARY SAVE / OVERWRITE ──────────────────────────────────────────
     if not st.session_state.cloud_saved:
-        if st.button("💾 Save Exam to Cloud Library", type="secondary"):
+        save_btn_label = "💾 Save Exam (with Solutions) to Cloud Library" if st.session_state.solutions_text else "💾 Save Exam to Cloud Library"
+        if st.button(save_btn_label, type="secondary"):
             with st.spinner("☁️ Archiving to database..."):
-                save_result = save_to_supabase(
+                success, save_result = save_to_supabase(
                     _t, _s, _y, _d, _set, st.session_state.pdf_bytes, st.session_state.word_bytes,
                     num_mc=st.session_state.meta_mc or 0, num_easy=st.session_state.meta_easy or 0,
                     num_med=st.session_state.meta_med or 0, num_hard=st.session_state.meta_hard or 0,
                     num_xh=st.session_state.meta_xh or 0,
+                    existing_id=st.session_state.saved_exam_id,
                 )
-                if save_result is True:
+                if success:
                     st.session_state.cloud_saved = True
+                    st.session_state.saved_exam_id = save_result
+                    st.session_state.saved_has_solutions = bool(st.session_state.solutions_text)
                     st.rerun()
                 else:
                     st.error("⚠️ Couldn't save this exam to the cloud library. Please try again, or contact tech support if it keeps happening.")
                     with st.expander("🛠️ Technical details (for tech support)"):
                         st.code(str(save_result))
     else:
-        st.success("✅ Exam successfully archived to Library!")
+        if st.session_state.solutions_text and not st.session_state.saved_has_solutions:
+            st.info("💡 **Worked solutions have been generated!** This exam was previously saved to your Library without solutions. Click below to overwrite and update the library version with the fully worked solutions.")
+            if st.button("💾 Save & Overwrite Exam in Cloud Library (with Solutions)", type="primary"):
+                with st.spinner("☁️ Updating and overwriting in database..."):
+                    success, save_result = save_to_supabase(
+                        _t, _s, _y, _d, _set, st.session_state.pdf_bytes, st.session_state.word_bytes,
+                        num_mc=st.session_state.meta_mc or 0, num_easy=st.session_state.meta_easy or 0,
+                        num_med=st.session_state.meta_med or 0, num_hard=st.session_state.meta_hard or 0,
+                        num_xh=st.session_state.meta_xh or 0,
+                        existing_id=st.session_state.saved_exam_id,
+                    )
+                    if success:
+                        st.session_state.cloud_saved = True
+                        st.session_state.saved_exam_id = save_result
+                        st.session_state.saved_has_solutions = True
+                        st.rerun()
+                    else:
+                        st.error("⚠️ Couldn't update this exam in the cloud library. Please try again, or contact tech support if it keeps happening.")
+                        with st.expander("🛠️ Technical details (for tech support)"):
+                            st.code(str(save_result))
+        else:
+            if st.session_state.saved_has_solutions:
+                st.success("✅ Exam (with fully worked solutions) successfully archived to Library!")
+            else:
+                st.success("✅ Exam successfully archived to Library!")
 
     st.markdown("---")
 
