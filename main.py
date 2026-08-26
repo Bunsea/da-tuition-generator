@@ -524,23 +524,56 @@ def _escape_bare_ampersands(text: str) -> str:
 
 
 def sanitize_ai_latex(text: str) -> str:
+    if not text:
+        return ""
     text = re.sub(r"\\documentclass.*?\{.*?\}", "", text, flags=re.DOTALL)
     text = re.sub(r"\\usepackage.*?\{.*?\}", "", text, flags=re.DOTALL)
     text = re.sub(r"\\geometry\{.*?\}", "", text, flags=re.DOTALL)
     text = re.sub(r"\\begin\{document\}", "", text)
     text = re.sub(r"\\end\{document\}", "", text)
     text = re.sub(r"\\pagestyle\{.*?\}", "", text)
+
     # Strip whole-line LaTeX comments (e.g. "% Original: y = |x^2-4|...").
-    # Models often leave these as scratch notes documenting transformations,
-    # plotted points, etc. If left in place, the blanket % -> \% escape below
-    # would turn them into literal printed text — and that text often contains
-    # ^ or _ outside math mode, which fatally crashes pdflatex. Removing full
-    # comment lines first means genuine comments just vanish (harmless),
-    # while real percent signs inside actual content still get escaped below.
     text = re.sub(r"(?m)^[ \t]*%.*\n?", "", text)
+
+    # Clean up TikZ environments: strip internal comments to prevent pgf syntax errors
+    def _clean_tikz(match):
+        tikz_block = match.group(0)
+        return re.sub(r"(?m)[ \t]*%.*$", "", tikz_block)
+
+    text = re.sub(r"\\begin\{tikzpicture\}.*?\\end\{tikzpicture\}", _clean_tikz, text, flags=re.DOTALL)
+
+    # Fix markdown bold **text** -> \textbf{text}
     text = re.sub(r"\*\*(.*?)\*\*", r"\\textbf{\1}", text)
+
+    # Fix malformed environment delimiters / AI typos:
+    # 1. \begin{env> or \end{env> or \begin{env) or \end{env) or \begin{env] or \end{env]
+    text = re.sub(r"\\(begin|end)\{([a-zA-Z*]+)[>\]\)]", r"\\\1{\2}", text)
+    # 2. \begin[env] or \end[env] -> \begin{env} or \end{env}
+    text = re.sub(r"\\(begin|end)\[([a-zA-Z*]+)\]", r"\\\1{\2}", text)
+    # 3. \begin(env) or \end(env) -> \begin{env} or \end{env}
+    text = re.sub(r"\\(begin|end)\(([a-zA-Z*]+)\)", r"\\\1{\2}", text)
+    # 4. \begin{env or \end{env followed by whitespace/newline without closing brace
+    text = re.sub(r"\\(begin|end)\{([a-zA-Z*]+)(?=[ \t\n\r])", r"\\\1{\2}", text)
+
+    # Fix "Missing \item" if \vspace appears immediately after \begin{enumerate} or \begin{itemize}
+    text = re.sub(r"(\\begin\{(?:enumerate|itemize)\})\s*\\vspace\*?\{[^}]+\}\s*", r"\1\n", text)
+
+    # Escape bare percent signs
     text = re.sub(r"(?<!\\)%", r"\%", text)
+
+    # Escape bare ampersands
     text = _escape_bare_ampersands(text)
+
+    # Balance environments (auto-close any unclosed begin{env})
+    tracked_envs = ["enumerate", "itemize", "tikzpicture", "align*", "aligned", "cases", "matrix", "pmatrix", "bmatrix", "center"]
+    for env in tracked_envs:
+        escaped_env = re.escape(env)
+        opens = len(re.findall(rf"\\begin\{{{escaped_env}\}}", text))
+        closes = len(re.findall(rf"\\end\{{{escaped_env}\}}", text))
+        if opens > closes:
+            text += ("\n" + f"\\end{{{env}}}\n" * (opens - closes))
+
     return text.strip()
 
 
@@ -566,7 +599,7 @@ def build_word_doc_pandoc(content, answers, solutions, topic, header_title, tota
     )
 
     full_tex = f"""\\documentclass{{article}}
-\\usepackage{{amsmath, amssymb, graphicx, booktabs, array}}
+\\usepackage{{amsmath, amssymb, graphicx, booktabs, array, bm}}
 \\begin{{document}}
 \\begin{{center}}
     \\includegraphics[width=1.2in]{{{LOGO_PATH.replace(chr(92), "/")}}} \\\\[0.4cm]
@@ -628,11 +661,11 @@ def build_latex_pdf(display_topic, header_title, content, answers, solutions, to
 \\usepackage{{lmodern}}
 \\usepackage[utf8]{{inputenc}}
 \\usepackage[T1]{{fontenc}}
-\\usepackage{{amsmath, amssymb, booktabs, array}}
+\\usepackage{{amsmath, amssymb, booktabs, array, bm}}
 \\usepackage{{fancyhdr}}
 \\usepackage{{graphicx}}
 \\usepackage{{tikz}}
-\\usetikzlibrary{{arrows.meta, positioning, calc, shapes.geometric}}
+\\usetikzlibrary{{arrows.meta, positioning, calc, shapes.geometric, 3d, angles, quotes}}
 \\usepackage{{pgfplots}}
 \\pgfplotsset{{compat=1.18}}
 \\pagestyle{{fancy}}
@@ -1194,7 +1227,7 @@ CRITICAL EXCEPTIONS:
     - Do NOT generate \\documentclass, \\usepackage, \\begin{{document}}, \\end{{document}}, or \\geometry.
     - Provide raw LaTeX code that starts immediately with \\section* or \\begin{{enumerate}}.
     - NEVER use the `%` symbol to write hidden code comments (e.g. `% Vertex` or `% Graph starts here`). The system automatically escapes all `%` symbols into `\\%`, so if you place them inside option brackets or coordinate lists, the `pgfplots` compiler will fatally crash trying to read them as math. Only use `%` for actual mathematical percentages (e.g., 50%).
-12. MANDATORY ENVIRONMENT CLOSING: Every single `\\begin{{enumerate}}`, `\\begin{{itemize}}`, `\\begin{{align*}}`, or `\\begin{{tikzpicture}}` MUST have a matching `\\end{{...}}` tag. You must meticulously check that no environments are left open, as an unclosed environment will fatally crash the compiler.
+12. MANDATORY ENVIRONMENT CLOSING & BRACES: Every single `\\begin{{enumerate}}`, `\\begin{{itemize}}`, `\\begin{{align*}}`, or `\\begin{{tikzpicture}}` MUST have a matching `\\end{{...}}` tag with exact curly braces `{{...}}` (NEVER write angle brackets like `\\end{{enumerate>` or omit closing braces). You must meticulously check that no environments are left open or malformed, as unclosed environments will crash the compiler.
 {syllabus_ban}
 {auto_name_rule}
 
