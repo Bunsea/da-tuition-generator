@@ -78,30 +78,41 @@ def _log_error(context: str, exc: Exception) -> None:
 
 
 # ── SUPABASE CONNECTION ────────────────────────────────────────────────────────
+def _get_supabase_creds():
+    """Read Supabase URL and key, always preferring the service_role key to bypass RLS."""
+    sb_url = os.environ.get("SUPABASE_URL", "")
+    # Prefer service_role key from Streamlit secrets (highest priority)
+    sb_key = ""
+    try:
+        if hasattr(st, "secrets"):
+            sb_url = st.secrets.get("SUPABASE_URL", sb_url) or sb_url
+            sb_key = (
+                st.secrets.get("SUPABASE_SERVICE_ROLE_KEY", "")
+                or st.secrets.get("SUPABASE_SERVICE_KEY", "")
+                or st.secrets.get("SUPABASE_KEY", "")
+            )
+    except Exception:
+        pass
+    # Fall back to environment variables
+    if not sb_key:
+        sb_key = (
+            os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+            or os.environ.get("SUPABASE_SERVICE_KEY", "")
+            or os.environ.get("SUPABASE_KEY", "")
+        )
+    return sb_url, sb_key
+
+
 @st.cache_resource
 def init_supabase() -> Client | None:
-    sb_url = os.environ.get("SUPABASE_URL")
-    sb_key = (
-        os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-        or os.environ.get("SUPABASE_SERVICE_KEY")
-        or os.environ.get("SUPABASE_KEY")
-    )
-    if not sb_url and hasattr(st, "secrets"):
-        try:
-            sb_url = st.secrets.get("SUPABASE_URL")
-            sb_key = (
-                st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
-                or st.secrets.get("SUPABASE_SERVICE_KEY")
-                or st.secrets.get("SUPABASE_KEY")
-            )
-        except Exception:
-            pass
+    sb_url, sb_key = _get_supabase_creds()
     if sb_url and sb_key:
         return create_client(sb_url, sb_key)
     return None
 
 
 supabase_client = init_supabase()
+
 
 
 def get_next_set_number(subject, year, diff, clean_topic):
