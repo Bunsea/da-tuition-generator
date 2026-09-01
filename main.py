@@ -1,3 +1,4 @@
+from __future__ import annotations
 import streamlit as st
 from google import genai
 from google.genai import types
@@ -551,6 +552,8 @@ def _escape_bare_ampersands(text: str) -> str:
 def sanitize_ai_latex(text: str) -> str:
     if not text:
         return ""
+
+    # 1. Strip preamble commands the AI may have emitted
     text = re.sub(r"(?m)^[ \t]*\\documentclass.*$\n?", "", text)
     text = re.sub(r"(?m)^[ \t]*\\usepackage.*$\n?", "", text)
     text = re.sub(r"(?m)^[ \t]*\\usetikzlibrary.*$\n?", "", text)
@@ -558,54 +561,43 @@ def sanitize_ai_latex(text: str) -> str:
     text = re.sub(r"(?m)^[ \t]*\\geometry\{[^}]*\}[ \t]*$\n?", "", text)
     text = re.sub(r"\\begin\{document\}", "", text)
     text = re.sub(r"\\end\{document\}", "", text)
-    text = re.sub(r"\\pagestyle\{.*?\}", "", text)
+    text = re.sub(r"(?m)^[ \t]*\\pagestyle\{.*?\}[ \t]*$\n?", "", text)
 
-    # Strip whole-line LaTeX comments (e.g. "% Original: y = |x^2-4|...").
+    # 2. Strip whole-line LaTeX comments (e.g. "% Original: y = |x^2-4|...").
     text = re.sub(r"(?m)^[ \t]*%.*\n?", "", text)
 
-    # Clean up TikZ environments: strip internal comments to prevent pgf syntax errors
-    def _clean_tikz(match):
-        tikz_block = match.group(0)
-        return re.sub(r"(?m)[ \t]*%.*$", "", tikz_block)
+    # 3. Escape bare percent signs across the whole text (e.g. 50% -> 50\%, Mass Change (%) -> Mass Change (\%))
+    text = re.sub(r"(?<!\\)%", r"\%", text)
 
-    text = re.sub(r"\\begin\{tikzpicture\}.*?\\end\{tikzpicture\}", _clean_tikz, text, flags=re.DOTALL)
+    # 4. Escape bare ampersands (protecting matrices, tables, align, tikz)
+    text = _escape_bare_ampersands(text)
 
-    # Fix markdown bold **text** -> \textbf{text}
+    # 5. Fix markdown bold **text** -> \textbf{text}
     text = re.sub(r"\*\*(.*?)\*\*", r"\\textbf{\1}", text)
 
-    # Fix any command arguments where '{...>' was written instead of '{...}' (e.g., \vspace{0.5cm>, \textbf{text>, \frac{a>{b>)
+    # 6. Fix command argument typos where '{...>' was written instead of '{...}'
     for _ in range(3):
         text = re.sub(r"(\\[a-zA-Z*]+(?:\[[^\]\n]*\])?(?:\{[^{}\n]*\})*)\{([^{}\n]*?)>", r"\1{\2}", text)
 
-    # Fix \begin[env] / \end[env] or \begin(env) / \end(env)
+    # 7. Fix \begin[env] / \end[env] or \begin(env) / \end(env)
     text = re.sub(r"\\(begin|end)\[([a-zA-Z*]+)\]", r"\\\1{\2}", text)
     text = re.sub(r"\\(begin|end)\(([a-zA-Z*]+)\)", r"\\\1{\2}", text)
 
-    # Fix \begin{env> / \end{env> / \begin{env) / \end{env)
+    # 8. Fix \begin{env> / \end{env> / \begin{env) / \end{env)
     text = re.sub(r"\\(begin|end)\{([a-zA-Z*]+)[>\]\)]", r"\\\1{\2}", text)
 
-    # Fix commands where closing brace was omitted at end of line (e.g. \vspace{0.5cm)
+    # 9. Fix commands where closing brace was omitted at end of line
     text = re.sub(r"(\\(?:vspace\*?|hspace\*?|rule|label|ref|textbf|textit|mathbf|bm|vec|hat|underline))\{([a-zA-Z0-9\.\-\_\s]+)(?=[ \t]*[\n\r]|$)", r"\1{\2}", text)
 
-    # Fix \item[(A)>] or \item[(A)]> or \item[(A)>
+    # 10. Fix \item[(A)>] or \item[(A)]> or \item[(A)>
     text = re.sub(r"\\item\[\(([A-Za-z0-9]+)\)[>\]\)]*", r"\\item[(\1)]", text)
 
-    # Fix "Missing \item" if \vspace appears immediately after \begin{enumerate} or \begin{itemize}
+    # 11. Fix "Missing \item" if \vspace appears immediately after \begin{enumerate} or \begin{itemize}
     text = re.sub(r"(\\begin\{(?:enumerate|itemize)\})\s*\\vspace\*?\{[^}]+\}\s*", r"\1\n", text)
 
-    # Escape bare percent signs
-    text = re.sub(r"(?<!\\)%", r"\%", text)
-
-    # Escape bare ampersands
-    text = _escape_bare_ampersands(text)
-
-    # ── Rescue orphaned TikZ commands ──────────────────────────────────────
-    # If \draw, \fill, \node, \foreach etc. appear outside any
-    # \begin{tikzpicture}...\end{tikzpicture} block, wrap each orphaned
-    # cluster in a tikzpicture so pdfLaTeX doesn't crash with
-    # "Undefined control sequence".
+    # 12. Rescue orphaned TikZ / pgfplots commands outside of \begin{tikzpicture}
     _TIKZ_CMD_RE = re.compile(
-        r"\\(?:draw|fill|filldraw|path|node|foreach|coordinate|clip|shade|shadedraw)\b"
+        r"\\(?:draw|fill|filldraw|path|node|foreach|coordinate|clip|shade|shadedraw|addplot)\b|\\begin\{axis\}"
     )
 
     def _has_orphaned_tikz(txt):
@@ -649,8 +641,17 @@ def sanitize_ai_latex(text: str) -> str:
                     repaired.append(part)
         text = "".join(repaired)
 
-    # Balance environments (auto-close any unclosed begin{env})
-    tracked_envs = ["enumerate", "itemize", "tikzpicture", "align*", "aligned", "cases", "matrix", "pmatrix", "bmatrix", "center"]
+    # 13. Clean up all TikZ / pgfplots blocks: remove any empty or whitespace-only lines.
+    # Blank lines produce \par in TeX, which fatally crashes \begin{axis} ("Paragraph ended before axis was complete").
+    def _clean_tikz(match):
+        tikz_block = match.group(0)
+        lines = [l for l in tikz_block.splitlines() if l.strip()]
+        return "\n".join(lines)
+
+    text = re.sub(r"\\begin\{tikzpicture\}.*?\\end\{tikzpicture\}", _clean_tikz, text, flags=re.DOTALL)
+
+    # 14. Balance environments (auto-close any unclosed begin{env})
+    tracked_envs = ["enumerate", "itemize", "tikzpicture", "axis", "align*", "aligned", "cases", "matrix", "pmatrix", "bmatrix", "center"]
     for env in tracked_envs:
         escaped_env = re.escape(env)
         opens = len(re.findall(rf"\\begin\{{{escaped_env}\}}", text))
