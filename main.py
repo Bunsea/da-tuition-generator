@@ -695,11 +695,11 @@ def build_latex_pdf(display_topic, header_title, content, answers, solutions, to
 \\usepackage{{lmodern}}
 \\usepackage[utf8]{{inputenc}}
 \\usepackage[T1]{{fontenc}}
-\\usepackage{{amsmath, amssymb, amsfonts, booktabs, array, bm, mathtools, esvect, mathrsfs, xfrac}}
+\\usepackage{{amsmath, amssymb, amsfonts, booktabs, array, bm, mathtools}}
 \\usepackage{{fancyhdr}}
 \\usepackage{{graphicx}}
 \\usepackage{{tikz}}
-\\usetikzlibrary{{arrows.meta, positioning, calc, shapes.geometric, 3d, angles, quotes, patterns, patterns.meta, decorations, decorations.pathmorphing, decorations.markings, intersections, backgrounds, fit, math, plotmarks, shapes.misc, shapes.symbols}}
+\\usetikzlibrary{{arrows.meta, positioning, calc, shapes.geometric, 3d, angles, quotes, patterns, patterns.meta, decorations.pathmorphing, decorations.markings, intersections, backgrounds, fit}}
 \\usepackage{{pgfplots}}
 \\pgfplotsset{{compat=1.18}}
 \\pagestyle{{fancy}}
