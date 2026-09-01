@@ -553,6 +553,8 @@ def sanitize_ai_latex(text: str) -> str:
         return ""
     text = re.sub(r"\\documentclass.*?\{.*?\}", "", text, flags=re.DOTALL)
     text = re.sub(r"\\usepackage.*?\{.*?\}", "", text, flags=re.DOTALL)
+    text = re.sub(r"\\usetikzlibrary.*?\{.*?\}", "", text, flags=re.DOTALL)
+    text = re.sub(r"\\pgfplotsset.*?\{.*?\}", "", text, flags=re.DOTALL)
     text = re.sub(r"\\geometry\{.*?\}", "", text, flags=re.DOTALL)
     text = re.sub(r"\\begin\{document\}", "", text)
     text = re.sub(r"\\end\{document\}", "", text)
@@ -631,7 +633,7 @@ def build_word_doc_pandoc(content, answers, solutions, topic, header_title, tota
     )
 
     full_tex = f"""\\documentclass{{article}}
-\\usepackage{{amsmath, amssymb, graphicx, booktabs, array, bm}}
+\\usepackage{{amsmath, amssymb, amsfonts, graphicx, booktabs, array, bm, mathtools}}
 \\begin{{document}}
 \\begin{{center}}
     \\includegraphics[width=1.2in]{{{LOGO_PATH.replace(chr(92), "/")}}} \\\\[0.4cm]
@@ -693,11 +695,11 @@ def build_latex_pdf(display_topic, header_title, content, answers, solutions, to
 \\usepackage{{lmodern}}
 \\usepackage[utf8]{{inputenc}}
 \\usepackage[T1]{{fontenc}}
-\\usepackage{{amsmath, amssymb, booktabs, array, bm}}
+\\usepackage{{amsmath, amssymb, amsfonts, booktabs, array, bm, mathtools, esvect, mathrsfs, xfrac}}
 \\usepackage{{fancyhdr}}
 \\usepackage{{graphicx}}
 \\usepackage{{tikz}}
-\\usetikzlibrary{{arrows.meta, positioning, calc, shapes.geometric, 3d, angles, quotes}}
+\\usetikzlibrary{{arrows.meta, positioning, calc, shapes.geometric, 3d, angles, quotes, patterns, patterns.meta, decorations, decorations.pathmorphing, decorations.markings, intersections, backgrounds, fit, math, plotmarks, shapes.misc, shapes.symbols}}
 \\usepackage{{pgfplots}}
 \\pgfplotsset{{compat=1.18}}
 \\pagestyle{{fancy}}
