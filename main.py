@@ -551,11 +551,11 @@ def _escape_bare_ampersands(text: str) -> str:
 def sanitize_ai_latex(text: str) -> str:
     if not text:
         return ""
-    text = re.sub(r"\\documentclass.*?\{.*?\}", "", text, flags=re.DOTALL)
-    text = re.sub(r"\\usepackage.*?\{.*?\}", "", text, flags=re.DOTALL)
-    text = re.sub(r"\\usetikzlibrary.*?\{.*?\}", "", text, flags=re.DOTALL)
-    text = re.sub(r"\\pgfplotsset.*?\{.*?\}", "", text, flags=re.DOTALL)
-    text = re.sub(r"\\geometry\{.*?\}", "", text, flags=re.DOTALL)
+    text = re.sub(r"(?m)^[ \t]*\\documentclass.*$\n?", "", text)
+    text = re.sub(r"(?m)^[ \t]*\\usepackage.*$\n?", "", text)
+    text = re.sub(r"(?m)^[ \t]*\\usetikzlibrary.*$\n?", "", text)
+    text = re.sub(r"(?m)^[ \t]*\\pgfplotsset.*$\n?", "", text)
+    text = re.sub(r"(?m)^[ \t]*\\geometry\{[^}]*\}[ \t]*$\n?", "", text)
     text = re.sub(r"\\begin\{document\}", "", text)
     text = re.sub(r"\\end\{document\}", "", text)
     text = re.sub(r"\\pagestyle\{.*?\}", "", text)
@@ -598,6 +598,56 @@ def sanitize_ai_latex(text: str) -> str:
 
     # Escape bare ampersands
     text = _escape_bare_ampersands(text)
+
+    # ── Rescue orphaned TikZ commands ──────────────────────────────────────
+    # If \draw, \fill, \node, \foreach etc. appear outside any
+    # \begin{tikzpicture}...\end{tikzpicture} block, wrap each orphaned
+    # cluster in a tikzpicture so pdfLaTeX doesn't crash with
+    # "Undefined control sequence".
+    _TIKZ_CMD_RE = re.compile(
+        r"\\(?:draw|fill|filldraw|path|node|foreach|coordinate|clip|shade|shadedraw)\b"
+    )
+
+    def _has_orphaned_tikz(txt):
+        stripped = re.sub(r"\\begin\{tikzpicture\}.*?\\end\{tikzpicture\}", "", txt, flags=re.DOTALL)
+        return bool(_TIKZ_CMD_RE.search(stripped))
+
+    if _has_orphaned_tikz(text):
+        parts = re.split(r"(\\begin\{tikzpicture\}.*?\\end\{tikzpicture\})", text, flags=re.DOTALL)
+        repaired = []
+        for i, part in enumerate(parts):
+            if i % 2 == 1:
+                repaired.append(part)
+            else:
+                if _TIKZ_CMD_RE.search(part):
+                    lines = part.split("\n")
+                    out_lines = []
+                    tikz_buf = []
+                    in_run = False
+                    for line in lines:
+                        is_tikz_line = bool(_TIKZ_CMD_RE.search(line))
+                        is_continuation = in_run and line.strip() and not re.match(r"\\(?:section|item|begin\{enumerate|begin\{itemize|end\{enumerate|end\{itemize)", line.strip())
+                        if is_tikz_line or is_continuation:
+                            if not in_run:
+                                in_run = True
+                                tikz_buf = []
+                            tikz_buf.append(line)
+                        else:
+                            if in_run:
+                                out_lines.append("\\begin{tikzpicture}")
+                                out_lines.extend(tikz_buf)
+                                out_lines.append("\\end{tikzpicture}")
+                                in_run = False
+                                tikz_buf = []
+                            out_lines.append(line)
+                    if in_run:
+                        out_lines.append("\\begin{tikzpicture}")
+                        out_lines.extend(tikz_buf)
+                        out_lines.append("\\end{tikzpicture}")
+                    repaired.append("\n".join(out_lines))
+                else:
+                    repaired.append(part)
+        text = "".join(repaired)
 
     # Balance environments (auto-close any unclosed begin{env})
     tracked_envs = ["enumerate", "itemize", "tikzpicture", "align*", "aligned", "cases", "matrix", "pmatrix", "bmatrix", "center"]
