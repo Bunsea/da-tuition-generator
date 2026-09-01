@@ -1283,6 +1283,8 @@ if generate_btn:
                     yr_ban = " CRITICAL: DO NOT generate Year 12 calculus applications. For Year 11, Logarithms and Exponentials are purely algebraic and basic graphical transformations. DO NOT ask for derivatives, stationary points, nature of turning points, points of inflection, or curve sketching using calculus. DO NOT include Year 12 Integration."
                     
             syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {actual_level} syllabus. NEVER generate questions on obsolete topics (e.g., Locus, 3D Trigonometry, Perpendicular Distance, Angle of Inclination).{ext_ban}{yr_ban}"
+        else:
+            syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {subject} syllabus. Ensure all diagrams, notations, reaction rates, equilibrium graphs, and scientific concepts follow official NSW HSC curriculum standards."
 
         prompt = f"""You are a NESA Examiner.
 Generate an examination on "{exam_focus}" for {grades_string}{level_text} in {subject}.
@@ -1344,6 +1346,10 @@ Whenever a question asks the student to "sketch" or "draw" a graph, you MUST pro
 - TIKZ LABELS AND ANCHORS SECURING: When creating labels or polar positioning elements in TikZ, you MUST use explicit standard syntax (e.g., label=90:{{$P_1$}}). NEVER use shorthand styles like [90:P_1] directly inside bracket options, as this will trigger a fatal pgfkeys compiler crash.
 - TIKZ SYNTAX CRASH PREVENTION: NEVER place raw text, descriptions, or unformatted comments directly inside a `\\draw` or `\\addplot` command path. If you need to add text to a diagram, you MUST use a properly formatted `\\node` at a specific coordinate (e.g., `\\node at (2,4) {{Text}};`).
 - STRICT COORDINATE FORMATTING (CRITICAL): When listing points in `\\addplot coordinates {{...}};`, you MUST ONLY output the raw coordinate pairs. NEVER add text, labels, or `%` comments next to the points. For example, writing `(0,5) % Y-intercept` or `(2,9) % Vertex` will fatally crash the compiler. Output only the pure coordinates: `(0,5) (2,9) (5,0)`.
+- CHEMISTRY & SCIENCE EQUILIBRIUM GRAPHS (CRITICAL):
+  * INSTANTANEOUS DISTURBANCES AT $t_1$: In Reaction Rate vs Time and Concentration vs Time graphs, whenever an instantaneous disturbance occurs (e.g. adding or removing a reactant/product, or an instantaneous pressure/volume change), the sudden jump MUST be drawn with a solid vertical line at $t_1$ connecting the pre-disturbance baseline directly to the new instantaneous peak value (e.g., `\\draw[thick] (t1, base_y) -- (t1, jump_y);`). NEVER leave a floating gap or disconnected curve starting in mid-air.
+  * GRADUAL RESPONSES: For gradual changes (e.g. reverse rate responding over time, temperature changes, or concentrations shifting toward a new equilibrium between $t_1$ and $t_2$), use smooth continuous curves.
+  * NO TEXT-LINE OVERLAPPING: Never let plot lines pass directly through text labels (such as 'Forward rate', 'Reverse rate', or chemical formulas). Always position text labels cleanly above or below curves using `node[above right]`, `node[above]`, `node[below]`, or `fill=white, inner sep=1.5pt`.
 
 {custom_instructions_block}
 When instructed, your final combined output must follow this template structure exactly:
