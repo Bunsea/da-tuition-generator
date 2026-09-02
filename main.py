@@ -1256,16 +1256,15 @@ if generate_btn:
         st.error("🚨 Action Required: Please select at least one question to generate.")
     else:
         if is_topic_empty and uploaded_photo is not None:
-            topic = ["Worksheet Extract"]
-
-        client = _get_genai_client()
-
-        topic_list = topic if isinstance(topic, list) else [topic]
-        clean_topic = ", ".join([re.sub(r"^\d+[\.\-]\s*", "", t).strip() for t in topic_list])
-
-        if sub_topic:
-            safe_sub = sub_topic.replace("/", "-").replace("\\", "-")
-            clean_topic = f"{clean_topic} - {safe_sub}"
+            clean_topic = "Topics from Attached Document"
+            exam_focus = "the exact topics, syllabus outcomes, and areas assessed in the attached document"
+        else:
+            topic_list = topic if isinstance(topic, list) else [topic]
+            clean_topic = ", ".join([re.sub(r"^\d+[\.\-]\s*", "", t).strip() for t in topic_list])
+            if sub_topic:
+                safe_sub = sub_topic.replace("/", "-").replace("\\", "-")
+                clean_topic = f"{clean_topic} - {safe_sub}"
+            exam_focus = f"{clean_topic}" + (f" - specifically focusing on: {sub_topic}" if sub_topic else "")
 
         grades_string = ", ".join(year_group)
         current_set_number = get_next_set_number(subject, grades_string, actual_level, clean_topic)
@@ -1295,14 +1294,13 @@ if generate_btn:
         else:
             layout_instruction = "CRITICAL SPACING RULE: Add exactly `\\vspace{0.5cm}` after EVERY question and sub-question."
 
-        exam_focus = f"{clean_topic}" + (f" - specifically focusing on: {sub_topic}" if sub_topic else "")
         level_text = f" {actual_level}" if actual_level else ""
 
         template_f = ""
         auto_name_rule = ""
         if uploaded_photo is not None:
             template_f = "===FILENAME_START===\nSchool_Subject_Year_Level_Topic\n===FILENAME_END===\n"
-            auto_name_rule = "12. AUTO-NAMING: You MUST generate a precise file name based on the attached document. Format EXACTLY like this: School_Subject_Year_Level_Topic. Use underscores. Place inside ===FILENAME_START=== and ===FILENAME_END=== tags. CRITICAL: If there is no explicit school name, DO NOT guess or invent an acronym like 'SHS'. Simply omit the school entirely."
+            auto_name_rule = "12. AUTO-NAMING & TOPIC EXTRACTION: You MUST inspect the attached document and extract the actual School Name (e.g. Bonnyrigg High School), Subject (e.g. Maths), Year Group (e.g. Year 9), and Topic Summary (e.g. Probability, Data Analysis, Volume). Format EXACTLY like this: School_Subject_Year_Level_Topic (e.g. Bonnyrigg_High_School_Maths_Year_9_Acceleration_Probability_Data_Analysis_Volume). Use underscores. Place inside ===FILENAME_START=== and ===FILENAME_END=== tags."
 
         template_c = "===LATEX_CONTENT_START===\n"
         template_a = "===LATEX_ANSWERS_START===\n"
@@ -1368,8 +1366,9 @@ EXAMINER RULES:
 9. PYTHON CALCULATOR SANDBOX (CRITICAL): You are equipped with a Python Code Execution tool. You MUST use it to calculate exact final decimal answers for strictly numeric topics like Financial Mathematics, Compound Interest, Annuities, or Statistics. 
 CRITICAL EXCEPTIONS: 
 - DO NOT use the Python tool for pure algebraic, calculus, or trigonometric topics (e.g., Parametrics, Inverse Functions, Polynomials, Integration). Evaluate symbolic algebra using your own internal reasoning.
-- DO NOT use the Python tool to solve Networks, Critical Path Analysis, Maximum Flow, or Geometry problems. Draw the TikZ diagrams and evaluate those structural networks purely using your internal reasoning.
-10. UNIFIED QUESTION CLONING RULE (CRITICAL): If the user provides text inside [CLONE EXEMPLARS] or attaches an image/PDF file, your primary objective shifts to reverse-engineering those target items. Analyze their mathematical mechanics, formatting phrasing, structural complexity, and cognitive depth. You MUST generate original, highly precise variations that test the exact same competency tier. Change numeric values, algebraic configurations, or contextual word scenarios so the output operates as a perfect parallel practice set. Do not clone formatting errors or unrelated headers.
+10. ATTACHED DOCUMENT & QUESTION CLONING RULE (CRITICAL):
+    - ASSESSMENT NOTIFICATION / SCOPE & SEQUENCE: If the attached document is an Assessment Notification or list of topics/outcomes (e.g., lists Probability, Data Analysis, Surface Area, Volume, etc.), you MUST strictly and exclusively generate questions on the exact topics and skills listed in that document. Distribute questions across all listed areas. DO NOT generate questions on unlisted topics (such as Algebra, Indices, or Financial Maths if they are not listed in the notification).
+    - QUESTION EXEMPLARS: If sample questions or past worksheet items are provided, reverse-engineer their mathematical mechanics, formatting phrasing, structural complexity, and cognitive depth to generate original parallel practice questions.
 11. CRITICAL OUTPUT FORMAT & NO COMMENTS: You must output ONLY the raw content. 
     - Do NOT generate \\documentclass, \\usepackage, \\begin{{document}}, \\end{{document}}, or \\geometry.
     - Provide raw LaTeX code that starts immediately with \\section* or \\begin{{enumerate}}.
@@ -1477,14 +1476,43 @@ When instructed, your final combined output must follow this template structure 
                     if exemplar_questions.strip():
                         ai_payload.append(f"\n\n[CLONE EXEMPLARS - TEXT INPUT]:\n{exemplar_questions}")
                     if uploaded_photo is not None:
-                        if uploaded_photo.name.lower().endswith(".pdf"):
-                            reader = PdfReader(uploaded_photo)
-                            pdf_text = "\n".join([page.extract_text() or "" for page in reader.pages])
-                            ai_payload.append(f"\n\n[CLONE EXEMPLARS - ATTACHED PDF TEXT]:\n{pdf_text}")
+                        doc_bytes = uploaded_photo.getvalue()
+                        fname = uploaded_photo.name.lower()
+                        if fname.endswith(".pdf"):
+                            mime_type = "application/pdf"
+                        elif fname.endswith(".png"):
+                            mime_type = "image/png"
+                        elif fname.endswith(".webp"):
+                            mime_type = "image/webp"
+                        elif fname.endswith((".jpg", ".jpeg")):
+                            mime_type = "image/jpeg"
                         else:
-                            img_data = Image.open(uploaded_photo)
-                            ai_payload.append(img_data)
-                        ai_payload.append("\n\n[ATTACHMENT INSTRUCTION]: Analyze the attached document and generate matching practice questions.")
+                            mime_type = uploaded_photo.type or "application/octet-stream"
+
+                        # Pass raw document bytes directly to Gemini for native OCR & vision (handles scanned PDFs, multi-page PDFs, and images)
+                        ai_payload.append(types.Part.from_bytes(data=doc_bytes, mime_type=mime_type))
+
+                        # If text is extractable from PDF, append as supplementary text
+                        if mime_type == "application/pdf":
+                            try:
+                                reader = PdfReader(io.BytesIO(doc_bytes))
+                                pdf_text = "\n".join([page.extract_text() or "" for page in reader.pages]).strip()
+                                if pdf_text:
+                                    ai_payload.append(f"\n\n[SUPPLEMENTARY EXTRACTED PDF TEXT]:\n{pdf_text}")
+                            except Exception:
+                                pass
+
+                        ai_payload.append(
+                            "\n\n[ATTACHED DOCUMENT INSTRUCTION - HIGHEST PRIORITY]:\n"
+                            "Carefully analyze the attached document:\n"
+                            "1. IF THE ATTACHMENT IS AN ASSESSMENT NOTIFICATION, EXAM NOTICE, OR TOPIC LIST (e.g. lists topics, areas assessed, outcomes, syllabus dot points):\n"
+                            "   - You MUST identify and extract EVERY topic, sub-topic, and skill specified in the notification (e.g. Probability, Tree Diagrams, Venn Diagrams, Two-Way Tables, Data Analysis, Box Plots, Stem-and-Leaf, Mean/Median/Mode, Standard Deviation, Scatter Plots, Area & Surface Area of composite solids, Volume of Prisms, Pyramids, Cones, Spheres).\n"
+                            "   - Your generated exam MUST STRICTLY AND EXCLUSIVELY focus on the topics, sub-topics, and syllabus outcomes listed in the document. Distribute the requested number of questions across all assessed areas.\n"
+                            "   - DO NOT generate questions on unlisted topics (for example, if the notification covers Probability, Statistics, and Volume, DO NOT generate Algebra, Indices, or Financial Mathematics).\n"
+                            "   - Extract the School Name, Subject, Year Group, and Topic Summary to format the filename in ===FILENAME_START=== tags (e.g. Bonnyrigg_High_School_Maths_Year_9_Probability_Data_Analysis_Volume).\n"
+                            "2. IF THE ATTACHMENT CONTAINS SAMPLE / EXEMPLAR QUESTIONS OR A WORKSHEET:\n"
+                            "   - Reverse-engineer the mechanics, phrasing, difficulty, and diagram styles of those exact questions, and generate original parallel practice questions testing the same competency."
+                        )
 
                     models_to_try = ["gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
                     last_error = None
