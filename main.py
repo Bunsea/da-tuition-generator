@@ -666,6 +666,54 @@ def _contains_tikz(*texts) -> bool:
     return any(t and "\\begin{tikzpicture}" in t for t in texts)
 
 
+def _format_exam_content(text: str) -> str:
+    """
+    Optimize question layout so questions and their working spaces stay together.
+    Prevents orphaned question text at page bottoms and separated working space on the next page.
+    """
+    if not text:
+        return ""
+
+    # 1. Protect mark allocations from word-breaking across lines/pages: (2 marks) -> \mbox{\textbf{(2~marks)}}
+    text = re.sub(
+        r"\((\d+)\s+marks?\)",
+        r"\\mbox{\\textbf{(\1~marks)}}",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\[(\d+)\s+marks?\]",
+        r"\\mbox{\\textbf{[\1~marks]}}",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    # 2. Prevent page breaks between question lines and their \vspace working spaces
+    text = re.sub(
+        r"(?<!\\nopagebreak)\s*\\vspace(\*?\{[^}]+\})",
+        r"\n\\par\\nopagebreak\\vspace\1",
+        text,
+    )
+
+    # 3. Prevent orphaned section titles at the bottom of pages
+    text = re.sub(
+        r"(?<!\\Needspace\{6cm\}\n)(\\section\*?\{[^}]+\})",
+        r"\n\\Needspace{6cm}\n\1",
+        text,
+    )
+
+    # 4. Inject \Needspace{4.5cm} for each question item so that if a question + working space
+    # cannot fit on the current page, LaTeX automatically starts the question cleanly on the next page.
+    text = re.sub(
+        r"(^[ \t]*\\item\b(?!\s*\[)(?!\s*\\Needspace))",
+        r"\1 \\Needspace{4.5cm}",
+        text,
+        flags=re.M,
+    )
+
+    return text
+
+
 # ── PANDOC & PDF BUILDERS ──────────────────────────────────────────────────────
 def build_word_doc_pandoc(content, answers, solutions, topic, header_title, total_marks, time_allowed, work_dir):
     tex_filename = os.path.join(work_dir, "pandoc.tex")
@@ -674,6 +722,7 @@ def build_word_doc_pandoc(content, answers, solutions, topic, header_title, tota
     def format_word(text):
         if not text:
             return ""
+        text = re.sub(r"\\Needspace\{[^}]+\}", "", text)
         text = re.sub(r"\\item\[\(([A-D])\)\]\s*", r"\n\n(\1) ", text)
         return text.replace(r"\begin{itemize}", "").replace(r"\end{itemize}", "")
 
@@ -735,6 +784,8 @@ def build_latex_pdf(display_topic, header_title, content, answers, solutions, to
     safe_title = header_title.replace("&", r"\&").replace("%", r"\%").replace("$", r"\$").replace("_", r"\_")
     safe_topic = display_topic.replace("&", r"\&").replace("%", r"\%").replace("$", r"\$").replace("_", r"\_")
 
+    formatted_content = _format_exam_content(content)
+
     solutions_section = (
         f"\\newpage\n\\begin{{center}}\\Large \\textbf{{FULLY WORKED SOLUTIONS}}\\end{{center}}\\vspace{{0.2cm}}\\hrule\\vspace{{0.4cm}}\n{solutions}"
         if solutions
@@ -753,6 +804,15 @@ def build_latex_pdf(display_topic, header_title, content, answers, solutions, to
 \\usetikzlibrary{{arrows.meta, positioning, calc, shapes.geometric, 3d, angles, quotes, patterns, patterns.meta, decorations.pathmorphing, decorations.markings, intersections, backgrounds, fit}}
 \\usepackage{{pgfplots}}
 \\pgfplotsset{{compat=1.18}}
+\\usepackage{{needspace}}
+
+\\widowpenalty=10000
+\\clubpenalty=10000
+\\displaywidowpenalty=10000
+\\predisplaypenalty=10000
+\\postdisplaypenalty=10000
+\\raggedbottom
+
 \\pagestyle{{fancy}}
 \\fancyhead[L]{{\\textbf{{{safe_title}}}}}
 \\fancyhead[R]{{\\textit{{DA Tuition}}}}
@@ -781,7 +841,7 @@ def build_latex_pdf(display_topic, header_title, content, answers, solutions, to
 \\textbf{{Time Allowed:}} {time_allowed} minutes \\hfill \\textbf{{Total Marks:}} {total_marks}
 \\vspace{{0.2cm}}\\hrule\\vspace{{0.4cm}}
 
-{content}
+{formatted_content}
 \\newpage
 \\begin{{center}}\\Large \\textbf{{ANSWERS}}\\end{{center}}\\vspace{{0.2cm}}\\hrule\\vspace{{0.4cm}}
 {answers}
@@ -1231,7 +1291,7 @@ if generate_btn:
         has_fr = total_fr > 0
 
         if "Exam" in layout_mode:
-            layout_instruction = "CRITICAL SPACING RULE: Add `\\vspace*{4cm}` (or more) after EVERY Free-Response question and sub-question."
+            layout_instruction = "CRITICAL SPACING & PAGE-BREAK RULE: Add `\\vspace*{4cm}` (or more) after EVERY Free-Response question and `\\vspace*{2.5cm}` after sub-questions. ALWAYS place the mark indicator (e.g., `\\hfill \\textbf{(2 marks)}`) directly at the end of the question text or equation, followed immediately by the `\\vspace*`. Keep each question and its space together."
         else:
             layout_instruction = "CRITICAL SPACING RULE: Add exactly `\\vspace{0.5cm}` after EVERY question and sub-question."
 
