@@ -1480,29 +1480,47 @@ When instructed, your final combined output must follow this template structure 
                     if uploaded_photo is not None:
                         doc_bytes = uploaded_photo.getvalue()
                         fname = uploaded_photo.name.lower()
-                        if fname.endswith(".pdf"):
-                            mime_type = "application/pdf"
-                        elif fname.endswith(".png"):
-                            mime_type = "image/png"
-                        elif fname.endswith(".webp"):
-                            mime_type = "image/webp"
-                        elif fname.endswith((".jpg", ".jpeg")):
-                            mime_type = "image/jpeg"
-                        else:
-                            mime_type = uploaded_photo.type or "application/octet-stream"
+                        is_pdf = fname.endswith(".pdf") or (uploaded_photo.type == "application/pdf")
 
-                        # Pass raw document bytes directly to Gemini for native OCR & vision (handles scanned PDFs, multi-page PDFs, and images)
-                        ai_payload.append(types.Part.from_bytes(data=doc_bytes, mime_type=mime_type))
+                        if is_pdf:
+                            # 1. Convert PDF pages to JPEG images (compatible with Gemini code_execution)
+                            rendered_any = False
+                            try:
+                                import pypdfium2 as pdfium
+                                pdf = pdfium.PdfDocument(doc_bytes)
+                                for page in pdf:
+                                    pil_image = page.render(scale=2.0).to_pil()
+                                    buf = io.BytesIO()
+                                    pil_image.save(buf, format="JPEG", quality=85)
+                                    ai_payload.append(types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg"))
+                                rendered_any = True
+                            except Exception:
+                                pass
 
-                        # If text is extractable from PDF, append as supplementary text
-                        if mime_type == "application/pdf":
+                            if not rendered_any:
+                                try:
+                                    reader = PdfReader(io.BytesIO(doc_bytes))
+                                    for page in reader.pages:
+                                        for img_file in page.images:
+                                            img_name = img_file.name.lower()
+                                            img_mime = "image/png" if img_name.endswith(".png") else "image/jpeg"
+                                            ai_payload.append(types.Part.from_bytes(data=img_file.data, mime_type=img_mime))
+                                            rendered_any = True
+                                except Exception:
+                                    pass
+
+                            # 2. Extract text if available from PDF
                             try:
                                 reader = PdfReader(io.BytesIO(doc_bytes))
                                 pdf_text = "\n".join([page.extract_text() or "" for page in reader.pages]).strip()
                                 if pdf_text:
-                                    ai_payload.append(f"\n\n[SUPPLEMENTARY EXTRACTED PDF TEXT]:\n{pdf_text}")
+                                    ai_payload.append(f"\n\n[EXTRACTED PDF TEXT]:\n{pdf_text}")
                             except Exception:
                                 pass
+                        else:
+                            # Direct image upload (PNG, JPEG, WEBP)
+                            mime_type = "image/png" if fname.endswith(".png") else ("image/webp" if fname.endswith(".webp") else "image/jpeg")
+                            ai_payload.append(types.Part.from_bytes(data=doc_bytes, mime_type=mime_type))
 
                         ai_payload.append(
                             "\n\n[ATTACHED DOCUMENT INSTRUCTION - HIGHEST PRIORITY]:\n"

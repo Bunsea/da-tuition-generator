@@ -2,6 +2,7 @@ streamlit
 google-genai
 supabase
 pypdf
+pypdfium2
 matplotlib
 numpy
 python-docx
