@@ -1255,6 +1255,8 @@ if generate_btn:
     elif total_q == 0:
         st.error("🚨 Action Required: Please select at least one question to generate.")
     else:
+        client = _get_genai_client()
+
         if is_topic_empty and uploaded_photo is not None:
             clean_topic = "Topics from Attached Document"
             exam_focus = "the exact topics, syllabus outcomes, and areas assessed in the attached document"
