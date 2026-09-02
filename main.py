@@ -120,15 +120,45 @@ def get_next_set_number(subject, year, diff, clean_topic):
     if not supabase_client:
         return 1
     try:
+        found_sets = []
+
+        # 1. Direct match on clean_topic prefix
         res = (
             supabase_client.table("saved_exams")
             .select("topic")
             .eq("subject", subject)
-            .eq("difficulty", diff)
             .ilike("topic", f"{clean_topic}%Set%")
             .execute()
         )
-        return len(res.data) + 1
+        for row in res.data or []:
+            t = row.get("topic", "")
+            m = re.search(r"\bSet\s*(\d+)\b", t, re.IGNORECASE)
+            if m:
+                found_sets.append(int(m.group(1)))
+
+        if found_sets:
+            return max(found_sets) + 1
+
+        # 2. Match on school/course stem if topic starts with a school name or multi-word prefix
+        words = clean_topic.split()
+        if len(words) >= 4:
+            prefix = " ".join(words[:4])
+            res2 = (
+                supabase_client.table("saved_exams")
+                .select("topic")
+                .eq("subject", subject)
+                .ilike("topic", f"{prefix}%Set%")
+                .execute()
+            )
+            for row in res2.data or []:
+                t = row.get("topic", "")
+                m = re.search(r"\bSet\s*(\d+)\b", t, re.IGNORECASE)
+                if m:
+                    found_sets.append(int(m.group(1)))
+            if found_sets:
+                return max(found_sets) + 1
+
+        return 1
     except Exception as e:
         _log_error("get_next_set_number", e)
         return 1
@@ -1301,8 +1331,8 @@ if generate_btn:
         template_f = ""
         auto_name_rule = ""
         if uploaded_photo is not None:
-            template_f = "===FILENAME_START===\nSchool_Subject_Year_Level_Topic\n===FILENAME_END===\n"
-            auto_name_rule = "12. AUTO-NAMING & TOPIC EXTRACTION: You MUST inspect the attached document and extract the actual School Name (e.g. Bonnyrigg High School), Subject (e.g. Maths), Year Group (e.g. Year 9), and Topic Summary (e.g. Probability, Data Analysis, Volume). Format EXACTLY like this: School_Subject_Year_Level_Topic (e.g. Bonnyrigg_High_School_Maths_Year_9_Acceleration_Probability_Data_Analysis_Volume). Use underscores. Place inside ===FILENAME_START=== and ===FILENAME_END=== tags."
+            template_f = "===FILENAME_START===\nSchool_Subject_Year_Level_AssessmentOrTopic\n===FILENAME_END===\n"
+            auto_name_rule = "12. AUTO-NAMING & TOPIC EXTRACTION: You MUST inspect the attached document and extract the actual School Name (e.g. Bonnyrigg High School), Subject (e.g. Maths), Year Group (e.g. Year 9), and official Assessment Title / Term (e.g. Term 3 Exam, Assessment Task 2, Half Yearly). Format EXACTLY like this: School_Subject_Year_Level_AssessmentTitle (e.g. Bonnyrigg_High_School_Maths_Year_9_Acceleration_Term_3_Exam). If no term/exam title is given, use a concise topic summary. Use underscores. Place inside ===FILENAME_START=== and ===FILENAME_END=== tags. Keep this filename identical and consistent across generations for the same document."
 
         template_c = "===LATEX_CONTENT_START===\n"
         template_a = "===LATEX_ANSWERS_START===\n"
