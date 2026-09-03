@@ -1725,12 +1725,22 @@ if st.session_state.questions_text:
         out_tok = st.session_state.meta_output_tokens or 0
         model_used = st.session_state.meta_model_used or "Unknown"
 
-        if "flash" in model_used.lower():
-            in_cost = (in_tok / 1_000_000) * 0.075
-            out_cost = (out_tok / 1_000_000) * 0.30
-        else:
+        model_lower = model_used.lower()
+        if "3.7-flash" in model_lower or "3.8-flash" in model_lower:
+            in_cost = (in_tok / 1_000_000) * 0.75
+            out_cost = (out_tok / 1_000_000) * 3.75
+        elif "flash-lite" in model_lower:
+            in_cost = (in_tok / 1_000_000) * 0.10
+            out_cost = (out_tok / 1_000_000) * 0.40
+        elif "2.5-flash" in model_lower or "3.5-flash" in model_lower or "flash" in model_lower:
+            in_cost = (in_tok / 1_000_000) * 0.30
+            out_cost = (out_tok / 1_000_000) * 2.50
+        elif "pro" in model_lower:
             in_cost = (in_tok / 1_000_000) * 1.50
             out_cost = (out_tok / 1_000_000) * 6.00
+        else:
+            in_cost = (in_tok / 1_000_000) * 0.75
+            out_cost = (out_tok / 1_000_000) * 3.75
 
         search_cost = 0.014 if st.session_state.used_search else 0.00
         total_cost = in_cost + out_cost + search_cost
