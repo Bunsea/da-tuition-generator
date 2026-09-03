@@ -689,6 +689,18 @@ def sanitize_ai_latex(text: str) -> str:
         if opens > closes:
             text += ("\n" + f"\\end{{{env}}}\n" * (opens - closes))
 
+    # 15. Automatically wrap all \begin{tikzpicture}...\end{tikzpicture} with adjustbox so no diagram overflows the page margins
+    def _wrap_tikz_adjustbox(match):
+        block = match.group(0)
+        return "\\adjustbox{max width=\\linewidth}{%\n" + block + "\n}"
+
+    text = re.sub(
+        r"(?<!\\adjustbox\{max width=\\linewidth\}\{%\n)(?<!\\resizebox\{\\linewidth\}\{!\}\{%\n)(\\begin\{tikzpicture\}.*?\\end\{tikzpicture\})",
+        _wrap_tikz_adjustbox,
+        text,
+        flags=re.DOTALL,
+    )
+
     return text.strip()
 
 
@@ -830,6 +842,7 @@ def build_latex_pdf(display_topic, header_title, content, answers, solutions, to
 \\usepackage{{amsmath, amssymb, amsfonts, booktabs, array, bm, mathtools}}
 \\usepackage{{fancyhdr}}
 \\usepackage{{graphicx}}
+\\usepackage{{adjustbox}}
 \\usepackage{{tikz}}
 \\usetikzlibrary{{arrows.meta, positioning, calc, shapes.geometric, 3d, angles, quotes, patterns, patterns.meta, decorations.pathmorphing, decorations.markings, intersections, backgrounds, fit}}
 \\usepackage{{pgfplots}}
@@ -1459,6 +1472,13 @@ GRAPH_END
 
 ENGINE 2: NATIVE TikZ
 Use this strictly for structural geometry: Networks, Critical Paths, 3D Trig diagrams, 3D Vectors, Forces/Inclined Planes, and Box Plots. The compiler has `\\usepackage{{tikz}}` installed (do NOT use pgfplots). Inject your `\\begin{{tikzpicture}}` code directly into the LaTeX output.
+
+- BOX PLOTS & NUMBER LINES (CRITICAL):
+  * NEVER draw box plots using raw unscaled data coordinates if they exceed 12cm (e.g., coordinates like `(20,0) -- (100,0)` without scaling create a 100cm wide diagram that runs off the page!).
+  * ALWAYS scale your TikZ box plots so the entire number line spans between 10cm and 13cm in total width. Use `xscale` on the tikzpicture:
+    - If scores range 0 to 100, use `\\begin{{tikzpicture}}[xscale=0.12]`.
+    - If data ranges 10 to 30, use `\\begin{{tikzpicture}}[xscale=0.6]`.
+  * For parallel box plots: Place group labels (e.g., 'Greenhouse A', 'Greenhouse B' or 'Method 1', 'Method 2') cleanly above the plots or with `node[left]`, ensuring they do not push the axis past the right page margin.
 
 CRITICAL GRAPHING REQUIREMENT:
 Whenever a question asks the student to "sketch" or "draw" a graph, you MUST provide the actual rendered graph in the Answers sections using the LaTeX `pgfplots` package. 
