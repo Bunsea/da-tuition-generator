@@ -120,45 +120,47 @@ def get_next_set_number(subject, year, diff, clean_topic):
     if not supabase_client:
         return 1
     try:
-        found_sets = []
+        found_sets = set()
 
-        # 1. Direct match on clean_topic prefix
-        res = (
+        # 1. Direct match on clean_topic prefix with year scoping
+        query = (
             supabase_client.table("saved_exams")
             .select("topic")
             .eq("subject", subject)
-            .ilike("topic", f"{clean_topic}%Set%")
-            .execute()
         )
+        if year:
+            query = query.eq("year_group", year)
+        res = query.ilike("topic", f"{clean_topic}%Set%").execute()
         for row in res.data or []:
             t = row.get("topic", "")
             m = re.search(r"\bSet\s*(\d+)\b", t, re.IGNORECASE)
             if m:
-                found_sets.append(int(m.group(1)))
+                found_sets.add(int(m.group(1)))
 
-        if found_sets:
-            return max(found_sets) + 1
+        # 2. Match on school/course stem if no direct match found
+        if not found_sets:
+            words = clean_topic.split()
+            if len(words) >= 4:
+                prefix = " ".join(words[:4])
+                query2 = (
+                    supabase_client.table("saved_exams")
+                    .select("topic")
+                    .eq("subject", subject)
+                )
+                if year:
+                    query2 = query2.eq("year_group", year)
+                res2 = query2.ilike("topic", f"{prefix}%Set%").execute()
+                for row in res2.data or []:
+                    t = row.get("topic", "")
+                    m = re.search(r"\bSet\s*(\d+)\b", t, re.IGNORECASE)
+                    if m:
+                        found_sets.add(int(m.group(1)))
 
-        # 2. Match on school/course stem if topic starts with a school name or multi-word prefix
-        words = clean_topic.split()
-        if len(words) >= 4:
-            prefix = " ".join(words[:4])
-            res2 = (
-                supabase_client.table("saved_exams")
-                .select("topic")
-                .eq("subject", subject)
-                .ilike("topic", f"{prefix}%Set%")
-                .execute()
-            )
-            for row in res2.data or []:
-                t = row.get("topic", "")
-                m = re.search(r"\bSet\s*(\d+)\b", t, re.IGNORECASE)
-                if m:
-                    found_sets.append(int(m.group(1)))
-            if found_sets:
-                return max(found_sets) + 1
-
-        return 1
+        # Find the lowest available positive integer (re-uses deleted/missing set slots starting at Set 1)
+        k = 1
+        while k in found_sets:
+            k += 1
+        return k
     except Exception as e:
         _log_error("get_next_set_number", e)
         return 1
@@ -1194,7 +1196,7 @@ for y in year_group:
 
 available_topics = sorted(list(set(available_topics)), key=lambda x: [int(c) if c.isdigit() else c for c in re.split(r"(\d+)", x)])
 
-c4, c5 = st.columns([2, 2])
+c4, c5, c6 = st.columns([3, 2, 1])
 with c4:
     if available_topics:
         topic = st.multiselect("Topic", available_topics)
@@ -1202,6 +1204,13 @@ with c4:
         topic = st.text_input("Topic", placeholder="e.g. Algebra, Calculus")
 with c5:
     sub_topic = st.text_input("Specific Sub-topic (Optional)", placeholder="e.g. Slope Fields")
+with c6:
+    set_number_input = st.number_input(
+        "Set #",
+        min_value=0,
+        value=0,
+        help="Leave 0 for automatic numbering (starts at 1 or fills missing gaps), or enter a specific set number (e.g. 1).",
+    )
 
 exemplar_questions = st.text_area(
     "🧬 Question Cloner (Optional Text Input)",
@@ -1314,7 +1323,10 @@ if generate_btn:
             exam_focus = f"{clean_topic}" + (f" - specifically focusing on: {sub_topic}" if sub_topic else "")
 
         grades_string = ", ".join(year_group)
-        current_set_number = get_next_set_number(subject, grades_string, actual_level, clean_topic)
+        if set_number_input > 0:
+            current_set_number = int(set_number_input)
+        else:
+            current_set_number = get_next_set_number(subject, grades_string, actual_level, clean_topic)
         display_topic = f"{clean_topic} Set {current_set_number}"
 
         style_block = f"STYLE & SYLLABUS REFERENCE:\n{style_samples}\n\n" if style_samples else ""
@@ -1678,9 +1690,16 @@ When instructed, your final combined output must follow this template structure 
             if fn_m and fn_m.group(1).strip():
                 ai_generated_name = re.sub(r"[^A-Za-z0-9_\-\(\) ]", "_", fn_m.group(1).strip())
                 clean_topic = ai_generated_name.replace("_", " ")
-                current_set_number = get_next_set_number(subject, grades_string, actual_level, clean_topic)
+                if set_number_input > 0:
+                    current_set_number = int(set_number_input)
+                else:
+                    current_set_number = get_next_set_number(subject, grades_string, actual_level, clean_topic)
                 display_topic = f"{clean_topic} Set {current_set_number}"
             else:
+                if set_number_input > 0:
+                    current_set_number = int(set_number_input)
+                else:
+                    current_set_number = get_next_set_number(subject, grades_string, actual_level, clean_topic)
                 display_topic = f"{clean_topic} Set {current_set_number}"
 
             c_m = re.search(r"===?\s*LATEX_CONTENT_START\s*===?(.*?)(?:===?\s*LATEX_CONTENT_END\s*===?|===?\s*LATEX_ANSWERS_START|$)", out, re.DOTALL | re.IGNORECASE)
@@ -1742,7 +1761,37 @@ if st.session_state.questions_text:
 
     st.markdown("---")
     lvl_str = f" {_d}" if _d else ""
-    st.markdown(f"### {_disp} ({_y}{lvl_str})")
+
+    p_col1, p_col2 = st.columns([4, 1], vertical_alignment="center")
+    with p_col1:
+        st.markdown(f"### {_disp} ({_y}{lvl_str})")
+    with p_col2:
+        edit_set = st.number_input(
+            "Set #",
+            min_value=1,
+            value=int(_set or 1),
+            key="preview_edit_set",
+            help="Change the set number before saving to Cloud Library if needed.",
+        )
+        if edit_set != _set:
+            st.session_state.meta_set = edit_set
+            st.session_state.display_topic = f"{_t} Set {edit_set}"
+            title = f"{_y} {_s}{lvl_str}".strip()
+            work_dir = _get_or_create_work_dir()
+            p_bytes, t_bytes, w_bytes, log, word_reason = _render_exam_files(
+                work_dir,
+                st.session_state.display_topic,
+                title,
+                st.session_state.questions_text,
+                st.session_state.answers_text,
+                st.session_state.solutions_text or "",
+                st.session_state.meta_n,
+            )
+            st.session_state.pdf_bytes = p_bytes
+            st.session_state.tex_bytes = t_bytes
+            st.session_state.word_bytes = w_bytes
+            st.session_state.cloud_saved = False
+            st.rerun()
 
     if st.session_state.get("admin_pin") == "DA_ADMIN":
         in_tok = st.session_state.meta_input_tokens or 0
