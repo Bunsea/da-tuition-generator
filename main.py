@@ -1208,10 +1208,11 @@ exemplar_questions = st.text_area(
     placeholder="Paste specific questions here. The AI will generate variations matching their exact style and difficulty!",
 )
 
-st.markdown("##### 📸 Or, Upload an Exam Notification / Worksheet Photo")
-uploaded_photo = st.file_uploader(
-    "Upload a picture of a school worksheet or exam notice to automatically extract the context",
-    type=["png", "jpg", "jpeg", "pdf"],
+st.markdown("##### 📸 Or, Upload an Exam Notification / Worksheet Photo(s)")
+uploaded_photos = st.file_uploader(
+    "Upload picture(s) or PDF pages of a school worksheet or exam notice to automatically extract the context (multiple files supported)",
+    type=["png", "jpg", "jpeg", "webp", "pdf"],
+    accept_multiple_files=True,
 )
 st.caption("⚠️ Use your own past worksheets, or describe the style you want — avoid pasting or uploading questions copied verbatim from copyrighted textbooks or commercial exam banks.")
 
@@ -1219,23 +1220,23 @@ st.markdown("### 📊 Question Distribution")
 dist_cols = st.columns(5)
 with dist_cols[0]:
     use_mc = st.checkbox("Multiple Choice", value=True)
-    num_mc = st.number_input("MC Qty", min_value=0, max_value=30, value=5, label_visibility="collapsed") if use_mc else 0
+    num_mc = st.number_input("MC Qty", min_value=0, max_value=100, value=5, label_visibility="collapsed") if use_mc else 0
 with dist_cols[1]:
     use_easy = st.checkbox("Easy", value=True)
-    num_easy = st.number_input("Easy Qty", min_value=0, max_value=30, value=5, label_visibility="collapsed") if use_easy else 0
+    num_easy = st.number_input("Easy Qty", min_value=0, max_value=100, value=5, label_visibility="collapsed") if use_easy else 0
 with dist_cols[2]:
     use_med = st.checkbox("Medium", value=True)
-    num_med = st.number_input("Med Qty", min_value=0, max_value=30, value=5, label_visibility="collapsed") if use_med else 0
+    num_med = st.number_input("Med Qty", min_value=0, max_value=100, value=5, label_visibility="collapsed") if use_med else 0
 with dist_cols[3]:
     use_hard = st.checkbox("Hard", value=False)
-    num_hard = st.number_input("Hard Qty", min_value=0, max_value=30, value=5, label_visibility="collapsed") if use_hard else 0
+    num_hard = st.number_input("Hard Qty", min_value=0, max_value=100, value=5, label_visibility="collapsed") if use_hard else 0
 with dist_cols[4]:
     use_xh = st.checkbox("Extremely Hard", value=False)
-    num_xh = st.number_input("Ext. Hard Qty", min_value=0, max_value=30, value=5, label_visibility="collapsed") if use_xh else 0
+    num_xh = st.number_input("Ext. Hard Qty", min_value=0, max_value=100, value=5, label_visibility="collapsed") if use_xh else 0
 
 total_q = num_mc + num_easy + num_med + num_hard + num_xh
-if total_q > 40:
-    st.warning(f"⚠️ {total_q} questions requested. Large batches (40+) are more likely to get cut off mid-way by the AI. Consider generating in a few smaller sets for the most reliable results.")
+if total_q > 60:
+    st.info(f"ℹ️ Large batch requested ({total_q} questions). The AI may take 30–60 seconds to draft all questions and answers.")
 
 st.markdown("### 🖨️ Format & Spacing")
 layout_mode = st.radio("Layout:", ["Worksheet (No working out space)", "Exam (Space for working out)"], horizontal=True, label_visibility="collapsed")
@@ -1291,18 +1292,19 @@ with btn_col2:
 
 if generate_btn:
     is_topic_empty = not topic or (isinstance(topic, str) and not topic.strip())
+    has_upload = bool(uploaded_photos) if isinstance(uploaded_photos, list) else (uploaded_photos is not None)
     if not year_group:
         st.error("🚨 Action Required: Please select at least one **Year** group from the dropdown above.")
-    elif is_topic_empty and uploaded_photo is None:
-        st.error("🚨 Action Required: Please enter a **Topic**, or upload a photo for the AI to extract.")
+    elif is_topic_empty and not has_upload:
+        st.error("🚨 Action Required: Please enter a **Topic**, or upload photo(s) for the AI to extract.")
     elif total_q == 0:
         st.error("🚨 Action Required: Please select at least one question to generate.")
     else:
         client = _get_genai_client()
 
-        if is_topic_empty and uploaded_photo is not None:
+        if is_topic_empty and has_upload:
             clean_topic = "Topics from Attached Document"
-            exam_focus = "the exact topics, syllabus outcomes, and areas assessed in the attached document"
+            exam_focus = "the exact topics, syllabus outcomes, and areas assessed in the attached document(s)"
         else:
             topic_list = topic if isinstance(topic, list) else [topic]
             clean_topic = ", ".join([re.sub(r"^\d+[\.\-]\s*", "", t).strip() for t in topic_list])
@@ -1343,9 +1345,9 @@ if generate_btn:
 
         template_f = ""
         auto_name_rule = ""
-        if uploaded_photo is not None:
+        if has_upload:
             template_f = "===FILENAME_START===\nSchool_Subject_Year_Level_AssessmentOrTopic\n===FILENAME_END===\n"
-            auto_name_rule = "12. AUTO-NAMING & TOPIC EXTRACTION: You MUST inspect the attached document and extract the actual School Name (e.g. Bonnyrigg High School), Subject (e.g. Maths), Year Group (e.g. Year 9), and official Assessment Title / Term (e.g. Term 3 Exam, Assessment Task 2, Half Yearly). Format EXACTLY like this: School_Subject_Year_Level_AssessmentTitle (e.g. Bonnyrigg_High_School_Maths_Year_9_Acceleration_Term_3_Exam). If no term/exam title is given, use a concise topic summary. Use underscores. Place inside ===FILENAME_START=== and ===FILENAME_END=== tags. Keep this filename identical and consistent across generations for the same document."
+            auto_name_rule = "12. AUTO-NAMING & TOPIC EXTRACTION: You MUST inspect the attached document(s) and extract the actual School Name (e.g. Bonnyrigg High School), Subject (e.g. Maths), Year Group (e.g. Year 9), and official Assessment Title / Term (e.g. Term 3 Exam, Assessment Task 2, Half Yearly). Format EXACTLY like this: School_Subject_Year_Level_AssessmentTitle (e.g. Bonnyrigg_High_School_Maths_Year_9_Acceleration_Term_3_Exam). If no term/exam title is given, use a concise topic summary. Use underscores. Place inside ===FILENAME_START=== and ===FILENAME_END=== tags. Keep this filename identical and consistent across generations for the same document."
 
         template_c = "===LATEX_CONTENT_START===\n"
         template_a = "===LATEX_ANSWERS_START===\n"
@@ -1560,60 +1562,62 @@ When instructed, your final combined output must follow this template structure 
                     ai_payload = [prompt]
                     if exemplar_questions.strip():
                         ai_payload.append(f"\n\n[CLONE EXEMPLARS - TEXT INPUT]:\n{exemplar_questions}")
-                    if uploaded_photo is not None:
-                        doc_bytes = uploaded_photo.getvalue()
-                        fname = uploaded_photo.name.lower()
-                        is_pdf = fname.endswith(".pdf") or (uploaded_photo.type == "application/pdf")
+                    if has_upload:
+                        photos_list = uploaded_photos if isinstance(uploaded_photos, list) else [uploaded_photos]
+                        for photo in photos_list:
+                            doc_bytes = photo.getvalue()
+                            fname = photo.name.lower()
+                            is_pdf = fname.endswith(".pdf") or (getattr(photo, "type", "") == "application/pdf")
 
-                        if is_pdf:
-                            # 1. Convert PDF pages to JPEG images (compatible with Gemini code_execution)
-                            rendered_any = False
-                            try:
-                                import pypdfium2 as pdfium
-                                pdf = pdfium.PdfDocument(doc_bytes)
-                                for page in pdf:
-                                    pil_image = page.render(scale=2.0).to_pil()
-                                    buf = io.BytesIO()
-                                    pil_image.save(buf, format="JPEG", quality=85)
-                                    ai_payload.append(types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg"))
-                                rendered_any = True
-                            except Exception:
-                                pass
-
-                            if not rendered_any:
+                            if is_pdf:
+                                # 1. Convert PDF pages to JPEG images (compatible with Gemini code_execution)
+                                rendered_any = False
                                 try:
-                                    reader = PdfReader(io.BytesIO(doc_bytes))
-                                    for page in reader.pages:
-                                        for img_file in page.images:
-                                            img_name = img_file.name.lower()
-                                            img_mime = "image/png" if img_name.endswith(".png") else "image/jpeg"
-                                            ai_payload.append(types.Part.from_bytes(data=img_file.data, mime_type=img_mime))
-                                            rendered_any = True
+                                    import pypdfium2 as pdfium
+                                    pdf = pdfium.PdfDocument(doc_bytes)
+                                    for page in pdf:
+                                        pil_image = page.render(scale=2.0).to_pil()
+                                        buf = io.BytesIO()
+                                        pil_image.save(buf, format="JPEG", quality=85)
+                                        ai_payload.append(types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg"))
+                                    rendered_any = True
                                 except Exception:
                                     pass
 
-                            # 2. Extract text if available from PDF
-                            try:
-                                reader = PdfReader(io.BytesIO(doc_bytes))
-                                pdf_text = "\n".join([page.extract_text() or "" for page in reader.pages]).strip()
-                                if pdf_text:
-                                    ai_payload.append(f"\n\n[EXTRACTED PDF TEXT]:\n{pdf_text}")
-                            except Exception:
-                                pass
-                        else:
-                            # Direct image upload (PNG, JPEG, WEBP)
-                            mime_type = "image/png" if fname.endswith(".png") else ("image/webp" if fname.endswith(".webp") else "image/jpeg")
-                            ai_payload.append(types.Part.from_bytes(data=doc_bytes, mime_type=mime_type))
+                                if not rendered_any:
+                                    try:
+                                        reader = PdfReader(io.BytesIO(doc_bytes))
+                                        for page in reader.pages:
+                                            for img_file in page.images:
+                                                img_name = img_file.name.lower()
+                                                img_mime = "image/png" if img_name.endswith(".png") else "image/jpeg"
+                                                ai_payload.append(types.Part.from_bytes(data=img_file.data, mime_type=img_mime))
+                                                rendered_any = True
+                                    except Exception:
+                                        pass
+
+                                # 2. Extract text if available from PDF
+                                try:
+                                    reader = PdfReader(io.BytesIO(doc_bytes))
+                                    pdf_text = "\n".join([page.extract_text() or "" for page in reader.pages]).strip()
+                                    if pdf_text:
+                                        ai_payload.append(f"\n\n[EXTRACTED PDF TEXT FROM {photo.name}]:\n{pdf_text}")
+                                except Exception:
+                                    pass
+                            else:
+                                # Direct image upload (PNG, JPEG, WEBP)
+                                mime_type = "image/png" if fname.endswith(".png") else ("image/webp" if fname.endswith(".webp") else "image/jpeg")
+                                ai_payload.append(types.Part.from_bytes(data=doc_bytes, mime_type=mime_type))
 
                         ai_payload.append(
-                            "\n\n[ATTACHED DOCUMENT INSTRUCTION - HIGHEST PRIORITY]:\n"
-                            "Carefully analyze the attached document:\n"
-                            "1. IF THE ATTACHMENT IS AN ASSESSMENT NOTIFICATION, EXAM NOTICE, OR TOPIC LIST (e.g. lists topics, areas assessed, outcomes, syllabus dot points):\n"
-                            "   - You MUST identify and extract EVERY topic, sub-topic, and skill specified in the notification (e.g. Probability, Tree Diagrams, Venn Diagrams, Two-Way Tables, Data Analysis, Box Plots, Stem-and-Leaf, Mean/Median/Mode, Standard Deviation, Scatter Plots, Area & Surface Area of composite solids, Volume of Prisms, Pyramids, Cones, Spheres).\n"
-                            "   - Your generated exam MUST STRICTLY AND EXCLUSIVELY focus on the topics, sub-topics, and syllabus outcomes listed in the document. Distribute the requested number of questions across all assessed areas.\n"
+                            "\n\n[ATTACHED DOCUMENTS INSTRUCTION - HIGHEST PRIORITY]:\n"
+                            "Carefully analyze ALL attached documents/pages:\n"
+                            "1. IF THE ATTACHMENTS ARE AN ASSESSMENT NOTIFICATION, EXAM NOTICE, OR TOPIC LIST (e.g. lists topics, areas assessed, outcomes, syllabus dot points across one or more pages):\n"
+                            "   - You MUST inspect ALL attached pages/images and extract EVERY topic, sub-topic, and skill specified in the notification.\n"
+                            "   - Your generated exam MUST STRICTLY AND EXCLUSIVELY focus on the topics, sub-topics, and syllabus outcomes listed across all uploaded pages. Distribute the requested number of questions across all assessed areas.\n"
                             "   - DO NOT generate questions on unlisted topics (for example, if the notification covers Probability, Statistics, and Volume, DO NOT generate Algebra, Indices, or Financial Mathematics).\n"
                             "   - Extract the School Name, Subject, Year Group, and Topic Summary to format the filename in ===FILENAME_START=== tags (e.g. Bonnyrigg_High_School_Maths_Year_9_Probability_Data_Analysis_Volume).\n"
-                            "2. IF THE ATTACHMENT CONTAINS SAMPLE / EXEMPLAR QUESTIONS OR A WORKSHEET:\n"
+                            "2. IF THE ATTACHMENTS CONTAIN SAMPLE / EXEMPLAR QUESTIONS OR A WORKSHEET:\n"
                             "   - Reverse-engineer the mechanics, phrasing, difficulty, and diagram styles of those exact questions, and generate original parallel practice questions testing the same competency."
                         )
 
