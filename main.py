@@ -1355,24 +1355,57 @@ if generate_btn:
         elif not has_mc:
             strict_negatives = "CRITICAL: DO NOT GENERATE ANY MULTIPLE CHOICE QUESTIONS."
 
-        # ---> UPGRADED: Dynamic Syllabus, Level & YEAR Guardrails <---
+        # ---> UPGRADED: Dynamic Post-2019 NESA Syllabus Guardrails <---
         syllabus_ban = ""
         if subject == "Maths":
-            ext_ban = ""
+            universal_ban = (
+                " CRITICAL NESA SYLLABUS BANS (ALL MATHS COURSES): NEVER generate questions on obsolete pre-2019 topics: "
+                "(1) t-method / t-formulae (t = tan(x/2) substitutions), "
+                "(2) Product-to-Sum or Sum-to-Product trigonometric identities, "
+                "(3) Locus / Focus-Directrix parabola geometry (e.g. x^2 = 4ay, chords of contact, parametric tangents/normals), "
+                "(4) Euclidean Circle Geometry proofs (alternate segment, cyclic quadrilaterals, intersecting chords), "
+                "(5) Division of an interval in a given ratio (internal/external division), "
+                "(6) Simpson's Rule."
+            )
+            
+            level_ban = ""
+            if actual_level == "Advanced":
+                level_ban = (
+                    " CRITICAL ADVANCED LEVEL BANS: "
+                    "(1) 3D TRIGONOMETRY IS STRICTLY BANNED — Year 11 & 12 Advanced only covers 2D Trigonometry (Sine rule, Cosine rule, Area of triangle, Radians). 3D Trigonometry is exclusively an Extension 1 topic. "
+                    "(2) DO NOT include Extension 1/2 topics: Compound/Double Angles (sin(A+B), cos(2A)), Auxiliary angle method (Rcos(x-a)), Inverse Trig functions, Polynomial division / Remainder theorem / Sum and product of roots, Combinatorics / Permutations & Combinations, Vectors, Projectile Motion, Mathematical Induction, Perpendicular Distance formula, Angle between two lines."
+                )
+            elif actual_level == "Standard":
+                level_ban = (
+                    " CRITICAL STANDARD LEVEL BANS: 3D Trigonometry is STRICTLY BANNED. NO Calculus, NO Radians, NO Advanced Polynomials, NO Logarithm laws, NO Compound/Double angle trigonometry. Keep all math strictly within the NSW Mathematics Standard syllabus."
+                )
+            elif actual_level in ["Extension", "Extension 1"]:
+                level_ban = (
+                    " EXTENSION 1 SYLLABUS RULES: 3D Trigonometry IS ALLOWED & REQUIRED for 3D trig topics (ME-T1). "
+                    "REMEMBER: t-formulae, product-to-sum identities, Euclidean circle proofs, and division of an interval are completely obsolete and strictly banned in Extension 1. "
+                    "DO NOT include Extension 2 topics (Complex Numbers, Proof by Contradiction/Contrapositive, Integration by Parts, Volumes by Cylindrical Shells, 3D Vectors, Mechanics)."
+                )
+            elif actual_level in ["Extension 2"]:
+                level_ban = (
+                    " EXTENSION 2 SYLLABUS RULES: Follow the post-2019 Mathematics Extension 2 syllabus: Proof (Nature of Proof), Vectors (3D Vectors), Complex Numbers, Calculus (Further Integration, Volumes by Slicing & Cylindrical Shells), Mechanics (Resisted Motion, Simple Harmonic Motion). DO NOT include obsolete pre-2019 topics like Conics or Harder Circle Geometry."
+                )
+            
             yr_ban = ""
-            
-            # Ban Extension topics for standard/advanced students
-            if actual_level in ["Advanced", "Standard"]:
-                ext_ban = " CRITICAL: DO NOT include Extension 1 topics (e.g., Compound/Double Angles, Sum/Difference identities, t-formulae, Inverse Trig functions, Polynomial remainder theorem, or Combinatorics)."
-            
-            # Ban Year 12 topics for Year 11 students
             if "Year 11" in year_group and "Year 12" not in year_group:
                 if actual_level == "Standard":
-                    yr_ban = " CRITICAL: DO NOT generate Year 12 Standard topics (e.g., Z-scores, Normal Distribution, Annuities, Depreciation, Critical Path Analysis, Networks, or Bivariate Data). DO NOT generate questions requiring manual calculation of standard deviation. DO NOT include Compound or Simple Interest questions."
-                elif actual_level in ["Advanced", "Extension", "Extension 1"]:
-                    yr_ban = " CRITICAL: DO NOT generate Year 12 calculus applications. For Year 11, Logarithms and Exponentials are purely algebraic and basic graphical transformations. DO NOT ask for derivatives, stationary points, nature of turning points, points of inflection, or curve sketching using calculus. DO NOT include Year 12 Integration."
+                    yr_ban = (
+                        " YEAR 11 STANDARD BOUNDARIES: DO NOT generate Year 12 Standard topics (Normal Distribution, Z-scores, Annuities, Depreciation, Critical Path Analysis, Networks, Bivariate Data). DO NOT require manual calculation of standard deviation."
+                    )
+                elif actual_level == "Advanced":
+                    yr_ban = (
+                        " YEAR 11 ADVANCED BOUNDARIES: DO NOT generate Year 12 Advanced topics: NO Integration / Area under curves / Volumes of revolution, NO Financial Mathematics (Superannuation, Annuities, Series loan repayments), NO Continuous Random Variables / Normal Distribution, NO Bivariate Data Analysis, NO Calculus applications to exponentials or trigonometrics. Year 11 differentiation is strictly limited to First Principles, Power Rule on polynomials, and basic Tangents/Normals."
+                    )
+                elif actual_level in ["Extension", "Extension 1"]:
+                    yr_ban = (
+                        " YEAR 11 EXTENSION 1 BOUNDARIES: DO NOT generate Year 12 Extension 1 topics: NO Proof by Mathematical Induction, NO Projectile Motion (Vectors), NO Trigonometric Equations via Auxiliary Angle Rcos(x-a), NO Differential Equations / Exponential Growth, NO Calculus of Inverse Trig Functions, NO Binomial Distribution / Normal Approximation. Year 11 Ext 1 is strictly limited to Functions & Polynomials, Further Trigonometry (3D Trig, Compound/Double angles), Permutations & Combinations, Vectors in 2D, and Rates of Change."
+                    )
                     
-            syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {actual_level} syllabus. NEVER generate questions on obsolete topics (e.g., Locus, 3D Trigonometry, Perpendicular Distance, Angle of Inclination).{ext_ban}{yr_ban}"
+            syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {actual_level} syllabus.{universal_ban}{level_ban}{yr_ban}"
         else:
             syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {subject} syllabus. Ensure all diagrams, notations, reaction rates, equilibrium graphs, and scientific concepts follow official NSW HSC curriculum standards."
 
