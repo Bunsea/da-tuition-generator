@@ -180,6 +180,8 @@ def save_to_supabase(
     num_hard=0,
     num_xh=0,
     existing_id=None,
+    cost=None,
+    model=None,
 ):
     if not supabase_client:
         return False, "Supabase is not connected. Missing URL or Key."
@@ -245,8 +247,21 @@ def save_to_supabase(
             "docx_url": docx_url,
         }
 
+        # Try to include cost & model if supported by table schema
+        data_to_save = dict(data)
+        if cost is not None:
+            try:
+                data_to_save["cost"] = round(float(cost), 5)
+                if model:
+                    data_to_save["model"] = str(model)
+            except (ValueError, TypeError):
+                pass
+
         if existing_id:
-            supabase_client.table("saved_exams").update(data).eq("id", existing_id).execute()
+            try:
+                supabase_client.table("saved_exams").update(data_to_save).eq("id", existing_id).execute()
+            except Exception:
+                supabase_client.table("saved_exams").update(data).eq("id", existing_id).execute()
             return True, existing_id
         else:
             try:
@@ -261,12 +276,19 @@ def save_to_supabase(
                 )
                 if existing_match.data and len(existing_match.data) > 0:
                     matched_id = existing_match.data[0]["id"]
-                    supabase_client.table("saved_exams").update(data).eq("id", matched_id).execute()
+                    try:
+                        supabase_client.table("saved_exams").update(data_to_save).eq("id", matched_id).execute()
+                    except Exception:
+                        supabase_client.table("saved_exams").update(data).eq("id", matched_id).execute()
                     return True, matched_id
             except Exception as e:
                 _log_error("check_existing_match", e)
 
-            res = supabase_client.table("saved_exams").insert(data).execute()
+            try:
+                res = supabase_client.table("saved_exams").insert(data_to_save).execute()
+            except Exception:
+                res = supabase_client.table("saved_exams").insert(data).execute()
+
             saved_id = None
             if res.data and len(res.data) > 0 and "id" in res.data[0]:
                 saved_id = res.data[0]["id"]
@@ -1071,9 +1093,39 @@ with st.sidebar:
         st.header("⚙️ Advanced Settings")
         use_live_search = st.checkbox("🌍 Enable Live Web Search", value=False)
         extra_instructions = st.text_area("Extra Instructions (Optional)")
-        st.markdown("---")
-        with st.expander("🔐 Admin Access"):
-            st.text_input("Admin PIN", type="password", key="admin_pin")
+
+    st.markdown("---")
+    with st.expander("🔐 Admin Access"):
+        st.text_input("Admin PIN", type="password", key="admin_pin")
+
+
+def _get_exam_cost_info(exam: dict) -> tuple[float, str]:
+    """Extract stored cost or compute an accurate estimate using Gemini 3.7 Flash rates."""
+    if exam.get("cost") is not None:
+        try:
+            return float(exam["cost"]), exam.get("model") or "gemini-3.7-flash"
+        except (ValueError, TypeError):
+            pass
+
+    topic_str = exam.get("topic", "")
+    mc_matches = re.findall(r"(\d+)\s*MC", topic_str, re.IGNORECASE)
+    fr_matches = re.findall(r"(\d+)\s*(?:Easy|Med|Medium|Hard|Ext)", topic_str, re.IGNORECASE)
+
+    num_mc = sum(int(m) for m in mc_matches) if mc_matches else 0
+    num_fr = sum(int(m) for m in fr_matches) if fr_matches else 0
+    total_q = num_mc + num_fr
+
+    if total_q == 0:
+        total_q = 15
+        num_mc = 5
+        num_fr = 10
+
+    est_in_tokens = 6500
+    est_out_tokens = (num_mc * 120) + (num_fr * 250) + 500
+
+    # Gemini 3.7 Flash current published pricing: $0.75 / 1M in, $3.75 / 1M out
+    est_cost = ((est_in_tokens / 1_000_000) * 0.75) + ((est_out_tokens / 1_000_000) * 3.75)
+    return round(est_cost, 5), exam.get("model") or "gemini-3.7-flash"
 
 if app_mode == "📚 Exam Library":
     st.header("📚 Exam Library")
@@ -1133,9 +1185,11 @@ if app_mode == "📚 Exam Library":
                 st.caption(f"Showing {len(filtered_exams)} exam(s)")
                 for exam in filtered_exams:
                     lvl_str_lib = f" {exam['difficulty']}" if exam.get("difficulty") else ""
-                    with st.expander(f"📝 {exam['topic']} ({exam['subject']} - {exam['year_group']}{lvl_str_lib})"):
+                    cost_val, model_val = _get_exam_cost_info(exam)
+                    cost_badge = f"${cost_val:.4f}"
+                    with st.expander(f"📝 {exam['topic']} ({exam['subject']} - {exam['year_group']}{lvl_str_lib})  ·  💸 {cost_badge}"):
                         sydney_timestamp = get_sydney_time(exam.get("created_at", ""))
-                        st.caption(f"📅 **Generated:** {sydney_timestamp}")
+                        st.caption(f"📅 **Generated:** {sydney_timestamp} &nbsp;&nbsp;|&nbsp;&nbsp; 💸 **Cost:** {cost_badge} &nbsp;&nbsp;|&nbsp;&nbsp; 🤖 **Engine:** `{model_val}`")
 
                         e_col1, e_col2, e_col3 = st.columns([2, 2, 1])
                         if exam.get("pdf_url"):
@@ -1279,7 +1333,7 @@ _SS_KEYS = (
     "word_skip_reason", "compiler_log", "meta_topic", "meta_subject", "meta_year", "meta_diff",
     "meta_n", "meta_set", "cloud_saved", "display_topic", "meta_mc", "meta_easy", "meta_med",
     "meta_hard", "meta_xh", "meta_input_tokens", "meta_output_tokens", "meta_model_used",
-    "used_search", "phase_1_raw", "saved_ai_payload", "work_dir",
+    "meta_total_cost", "used_search", "phase_1_raw", "saved_ai_payload", "work_dir",
     "saved_exam_id", "saved_has_solutions",
 )
 for _key in _SS_KEYS:
@@ -1793,30 +1847,32 @@ if st.session_state.questions_text:
             st.session_state.cloud_saved = False
             st.rerun()
 
+    in_tok = st.session_state.meta_input_tokens or 0
+    out_tok = st.session_state.meta_output_tokens or 0
+    model_used = st.session_state.meta_model_used or "Unknown"
+
+    model_lower = model_used.lower()
+    if "3.7-flash" in model_lower or "3.8-flash" in model_lower:
+        in_cost = (in_tok / 1_000_000) * 0.75
+        out_cost = (out_tok / 1_000_000) * 3.75
+    elif "flash-lite" in model_lower:
+        in_cost = (in_tok / 1_000_000) * 0.10
+        out_cost = (out_tok / 1_000_000) * 0.40
+    elif "2.5-flash" in model_lower or "3.5-flash" in model_lower or "flash" in model_lower:
+        in_cost = (in_tok / 1_000_000) * 0.30
+        out_cost = (out_tok / 1_000_000) * 2.50
+    elif "pro" in model_lower:
+        in_cost = (in_tok / 1_000_000) * 1.50
+        out_cost = (out_tok / 1_000_000) * 6.00
+    else:
+        in_cost = (in_tok / 1_000_000) * 0.75
+        out_cost = (out_tok / 1_000_000) * 3.75
+
+    search_cost = 0.014 if st.session_state.used_search else 0.00
+    total_cost = in_cost + out_cost + search_cost
+    st.session_state["meta_total_cost"] = total_cost
+
     if st.session_state.get("admin_pin") == "DA_ADMIN":
-        in_tok = st.session_state.meta_input_tokens or 0
-        out_tok = st.session_state.meta_output_tokens or 0
-        model_used = st.session_state.meta_model_used or "Unknown"
-
-        model_lower = model_used.lower()
-        if "3.7-flash" in model_lower or "3.8-flash" in model_lower:
-            in_cost = (in_tok / 1_000_000) * 0.75
-            out_cost = (out_tok / 1_000_000) * 3.75
-        elif "flash-lite" in model_lower:
-            in_cost = (in_tok / 1_000_000) * 0.10
-            out_cost = (out_tok / 1_000_000) * 0.40
-        elif "2.5-flash" in model_lower or "3.5-flash" in model_lower or "flash" in model_lower:
-            in_cost = (in_tok / 1_000_000) * 0.30
-            out_cost = (out_tok / 1_000_000) * 2.50
-        elif "pro" in model_lower:
-            in_cost = (in_tok / 1_000_000) * 1.50
-            out_cost = (out_tok / 1_000_000) * 6.00
-        else:
-            in_cost = (in_tok / 1_000_000) * 0.75
-            out_cost = (out_tok / 1_000_000) * 3.75
-
-        search_cost = 0.014 if st.session_state.used_search else 0.00
-        total_cost = in_cost + out_cost + search_cost
         search_badge = " &nbsp;&nbsp;|&nbsp;&nbsp; 🌍 *Live Web Search*" if st.session_state.used_search else ""
         st.caption(f"**💸 Generation Cost:** ${total_cost:.5f} &nbsp;&nbsp;|&nbsp;&nbsp; **Engine:** `{model_used}` &nbsp;&nbsp;|&nbsp;&nbsp; **Tokens:** {in_tok:,} In / {out_tok:,} Out{search_badge}")
         st.caption("ℹ️ Per-token pricing above may drift from Google's current published rates — treat this as an estimate.")
@@ -1911,6 +1967,8 @@ if st.session_state.questions_text:
                     num_med=st.session_state.meta_med or 0, num_hard=st.session_state.meta_hard or 0,
                     num_xh=st.session_state.meta_xh or 0,
                     existing_id=st.session_state.saved_exam_id,
+                    cost=st.session_state.get("meta_total_cost"),
+                    model=st.session_state.get("meta_model_used"),
                 )
                 if success:
                     st.session_state.cloud_saved = True
@@ -1932,6 +1990,8 @@ if st.session_state.questions_text:
                         num_med=st.session_state.meta_med or 0, num_hard=st.session_state.meta_hard or 0,
                         num_xh=st.session_state.meta_xh or 0,
                         existing_id=st.session_state.saved_exam_id,
+                        cost=st.session_state.get("meta_total_cost"),
+                        model=st.session_state.get("meta_model_used"),
                     )
                     if success:
                         st.session_state.cloud_saved = True
