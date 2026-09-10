@@ -182,6 +182,7 @@ def save_to_supabase(
     existing_id=None,
     cost=None,
     model=None,
+    extra_instructions="",
 ):
     if not supabase_client:
         return False, "Supabase is not connected. Missing URL or Key."
@@ -215,6 +216,7 @@ def save_to_supabase(
     file_base = f"{safe_topic} Set {set_num}{dist_str} - {yr_short} {subject}{lvl_text}"
     pdf_path = f"{subject}/{year}/{file_base}.pdf"
     docx_path = f"{subject}/{year}/{file_base}.docx"
+    instr_path = f"{subject}/{year}/{file_base}_instructions.txt"
 
     try:
         supabase_client.storage.from_("exam-files").upload(
@@ -238,6 +240,17 @@ def save_to_supabase(
             base_docx_url = supabase_client.storage.from_("exam-files").get_public_url(docx_path)
             docx_url = f"{base_docx_url}?t={int(time.time())}"
 
+        clean_instr = str(extra_instructions).strip() if extra_instructions else ""
+        if clean_instr:
+            try:
+                supabase_client.storage.from_("exam-files").upload(
+                    instr_path,
+                    clean_instr.encode("utf-8"),
+                    {"content-type": "text/plain; charset=utf-8", "upsert": "true"},
+                )
+            except Exception as e:
+                _log_error("save_instructions_storage", e)
+
         data = {
             "subject": subject,
             "year_group": year,
@@ -247,7 +260,7 @@ def save_to_supabase(
             "docx_url": docx_url,
         }
 
-        # Try to include cost & model if supported by table schema
+        # Prepare payload with all possible optional columns
         data_to_save = dict(data)
         if cost is not None:
             try:
@@ -257,12 +270,47 @@ def save_to_supabase(
             except (ValueError, TypeError):
                 pass
 
+        if clean_instr:
+            data_to_save["extra_instructions"] = clean_instr
+            data_to_save["instructions"] = clean_instr
+
+        def _execute_update(row_id):
+            for payload in [
+                data_to_save,
+                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions")},
+                data,
+            ]:
+                try:
+                    supabase_client.table("saved_exams").update(payload).eq("id", row_id).execute()
+                    return True
+                except Exception:
+                    continue
+            return False
+
+        def _execute_insert():
+            for payload in [
+                data_to_save,
+                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions")},
+                data,
+            ]:
+                try:
+                    res = supabase_client.table("saved_exams").insert(payload).execute()
+                    saved_id = None
+                    if res.data and len(res.data) > 0 and "id" in res.data[0]:
+                        saved_id = res.data[0]["id"]
+                    return True, saved_id
+                except Exception:
+                    continue
+            return False, "Failed to insert exam into database."
+
         if existing_id:
-            try:
-                supabase_client.table("saved_exams").update(data_to_save).eq("id", existing_id).execute()
-            except Exception:
-                supabase_client.table("saved_exams").update(data).eq("id", existing_id).execute()
-            return True, existing_id
+            if _execute_update(existing_id):
+                try:
+                    get_exam_instructions.clear()
+                except Exception:
+                    pass
+                return True, existing_id
+            return False, "Failed to update existing exam in database."
         else:
             try:
                 existing_match = (
@@ -276,23 +324,21 @@ def save_to_supabase(
                 )
                 if existing_match.data and len(existing_match.data) > 0:
                     matched_id = existing_match.data[0]["id"]
-                    try:
-                        supabase_client.table("saved_exams").update(data_to_save).eq("id", matched_id).execute()
-                    except Exception:
-                        supabase_client.table("saved_exams").update(data).eq("id", matched_id).execute()
-                    return True, matched_id
+                    if _execute_update(matched_id):
+                        try:
+                            get_exam_instructions.clear()
+                        except Exception:
+                            pass
+                        return True, matched_id
             except Exception as e:
                 _log_error("check_existing_match", e)
 
+            success, saved_id = _execute_insert()
             try:
-                res = supabase_client.table("saved_exams").insert(data_to_save).execute()
+                get_exam_instructions.clear()
             except Exception:
-                res = supabase_client.table("saved_exams").insert(data).execute()
-
-            saved_id = None
-            if res.data and len(res.data) > 0 and "id" in res.data[0]:
-                saved_id = res.data[0]["id"]
-            return True, saved_id
+                pass
+            return success, saved_id
     except Exception as e:
         return False, str(e)
 
@@ -1087,12 +1133,17 @@ with st.sidebar:
     st.caption(f"⚙️ LaTeX engine: {'✅' if _pdflatex_ok else '❌ missing'}  ·  Word export: {'✅' if _pandoc_ok else '❌ missing'}")
 
     st.markdown("---")
-    app_mode = st.radio("App Mode", ["✨ Generator", "📚 Exam Library"])
+    app_modes = ["✨ Generator", "📚 Exam Library"]
+    app_mode = st.radio("App Mode", app_modes, key="main_app_mode")
     st.markdown("---")
     if app_mode == "✨ Generator":
         st.header("⚙️ Advanced Settings")
         use_live_search = st.checkbox("🌍 Enable Live Web Search", value=False)
-        extra_instructions = st.text_area("Extra Instructions (Optional)")
+        extra_instructions = st.text_area(
+            "Extra Instructions (Optional)",
+            key="extra_instructions_input",
+            help="Specific focus or requirements for this exam. Saved with the exam in the library.",
+        )
 
     st.markdown("---")
     with st.expander("🔐 Admin Access"):
@@ -1126,6 +1177,57 @@ def _get_exam_cost_info(exam: dict) -> tuple[float, str]:
     # Gemini 3.7 Flash current published pricing: $0.75 / 1M in, $3.75 / 1M out
     est_cost = ((est_in_tokens / 1_000_000) * 0.75) + ((est_out_tokens / 1_000_000) * 3.75)
     return round(est_cost, 5), exam.get("model") or "gemini-3.7-flash"
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_exam_instructions(pdf_url: str, db_instructions: str = "") -> str:
+    """Retrieve instructions from db field or storage companion file."""
+    if db_instructions and str(db_instructions).strip():
+        return str(db_instructions).strip()
+    if not pdf_url or not supabase_client:
+        return ""
+    try:
+        storage_path = unquote(pdf_url.split("/exam-files/")[-1].split("?")[0])
+        if storage_path.endswith(".pdf"):
+            instr_path = storage_path[:-4] + "_instructions.txt"
+            res = supabase_client.storage.from_("exam-files").download(instr_path)
+            if res:
+                return res.decode("utf-8").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def save_exam_instructions(exam_id: str, pdf_url: str, instructions_text: str) -> bool:
+    """Persist instructions to storage file and database."""
+    if not supabase_client:
+        return False
+    clean_text = instructions_text.strip()
+    if pdf_url:
+        try:
+            storage_path = unquote(pdf_url.split("/exam-files/")[-1].split("?")[0])
+            if storage_path.endswith(".pdf"):
+                instr_path = storage_path[:-4] + "_instructions.txt"
+                supabase_client.storage.from_("exam-files").upload(
+                    instr_path,
+                    clean_text.encode("utf-8"),
+                    {"content-type": "text/plain; charset=utf-8", "upsert": "true"},
+                )
+        except Exception as e:
+            _log_error("save_exam_instructions_storage", e)
+
+    for col_name in ("extra_instructions", "instructions"):
+        try:
+            supabase_client.table("saved_exams").update({col_name: clean_text}).eq("id", exam_id).execute()
+            break
+        except Exception:
+            pass
+
+    try:
+        get_exam_instructions.clear()
+    except Exception:
+        pass
+    return True
 
 if app_mode == "📚 Exam Library":
     st.header("📚 Exam Library")
@@ -1201,7 +1303,10 @@ if app_mode == "📚 Exam Library":
                             with st.spinner("Deleting from Cloud..."):
                                 paths_to_delete = []
                                 if exam.get("pdf_url"):
-                                    paths_to_delete.append(unquote(exam["pdf_url"].split("/exam-files/")[-1].split("?")[0]))
+                                    p_path = unquote(exam["pdf_url"].split("/exam-files/")[-1].split("?")[0])
+                                    paths_to_delete.append(p_path)
+                                    if p_path.endswith(".pdf"):
+                                        paths_to_delete.append(p_path[:-4] + "_instructions.txt")
                                 if exam.get("docx_url"):
                                     paths_to_delete.append(unquote(exam["docx_url"].split("/exam-files/")[-1].split("?")[0]))
 
@@ -1217,6 +1322,31 @@ if app_mode == "📚 Exam Library":
                                     st.error("⚠️ Couldn't delete this exam. Please try again or contact tech support.")
                                     with st.expander("🛠️ Technical details"):
                                         st.code(str(e))
+
+                        # --- EXTRA INSTRUCTIONS SECTION ---
+                        instr_text = get_exam_instructions(
+                            exam.get("pdf_url", ""),
+                            exam.get("extra_instructions") or exam.get("instructions") or "",
+                        )
+
+                        if instr_text:
+                            st.markdown("---")
+                            st.markdown("##### 💬 Extra Instructions Used")
+                            st.code(instr_text, language="text")
+                            c_reuse, _ = st.columns([2, 3])
+                            with c_reuse:
+                                if st.button("✨ Load Instructions into Generator", key=f"reuse_instr_{exam['id']}", type="primary", use_container_width=True):
+                                    st.session_state["extra_instructions_input"] = instr_text
+                                    st.session_state["main_app_mode"] = "✨ Generator"
+                                    st.rerun()
+
+                        with st.expander("✏️ Edit Instructions" if instr_text else "➕ Add Instructions / Notes"):
+                            edit_box = st.text_area("Instructions / Notes", value=instr_text, key=f"edit_box_{exam['id']}", placeholder="e.g. Focus on finding vertex, quadratic formula, word problems...")
+                            if st.button("💾 Save Instructions", key=f"save_btn_{exam['id']}"):
+                                with st.spinner("Saving instructions..."):
+                                    save_exam_instructions(exam["id"], exam.get("pdf_url", ""), edit_box)
+                                    st.success("Instructions updated!")
+                                    st.rerun()
 
     st.stop()
 
@@ -1333,7 +1463,7 @@ _SS_KEYS = (
     "word_skip_reason", "compiler_log", "meta_topic", "meta_subject", "meta_year", "meta_diff",
     "meta_n", "meta_set", "cloud_saved", "display_topic", "meta_mc", "meta_easy", "meta_med",
     "meta_hard", "meta_xh", "meta_input_tokens", "meta_output_tokens", "meta_model_used",
-    "meta_total_cost", "used_search", "phase_1_raw", "saved_ai_payload", "work_dir",
+    "meta_total_cost", "meta_extra_instructions", "used_search", "phase_1_raw", "saved_ai_payload", "work_dir",
     "saved_exam_id", "saved_has_solutions",
 )
 for _key in _SS_KEYS:
@@ -1793,6 +1923,7 @@ When instructed, your final combined output must follow this template structure 
                 "meta_med": num_med,
                 "meta_hard": num_hard,
                 "meta_xh": num_xh,
+                "meta_extra_instructions": extra_instructions.strip() if extra_instructions else "",
             })
 
             loading_placeholder.empty()
@@ -1819,6 +1950,8 @@ if st.session_state.questions_text:
     p_col1, p_col2 = st.columns([4, 1], vertical_alignment="center")
     with p_col1:
         st.markdown(f"### {_disp} ({_y}{lvl_str})")
+        if st.session_state.get("meta_extra_instructions"):
+            st.caption(f"💬 **Extra Instructions:** {st.session_state.meta_extra_instructions}")
     with p_col2:
         edit_set = st.number_input(
             "Set #",
@@ -1969,6 +2102,7 @@ if st.session_state.questions_text:
                     existing_id=st.session_state.saved_exam_id,
                     cost=st.session_state.get("meta_total_cost"),
                     model=st.session_state.get("meta_model_used"),
+                    extra_instructions=st.session_state.get("meta_extra_instructions", ""),
                 )
                 if success:
                     st.session_state.cloud_saved = True
@@ -1992,6 +2126,7 @@ if st.session_state.questions_text:
                         existing_id=st.session_state.saved_exam_id,
                         cost=st.session_state.get("meta_total_cost"),
                         model=st.session_state.get("meta_model_used"),
+                        extra_instructions=st.session_state.get("meta_extra_instructions", ""),
                     )
                     if success:
                         st.session_state.cloud_saved = True
