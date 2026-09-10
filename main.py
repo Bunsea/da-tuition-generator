@@ -1075,7 +1075,7 @@ def friendly_error_message(exc: Exception) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 TEACHER_REGISTRY_PATH = "_system/teachers_registry.json"
 PASSWORD_SALT = "DA_TUITION_ACADEMY_2026_SECURE_SALT"
-SCHOOL_INVITE_CODE = "DA-JUNIOR-2026"
+SCHOOL_INVITE_CODE = "DA-TUITION-2026"
 
 
 def _hash_password(password: str) -> str:
@@ -1310,7 +1310,7 @@ if not st.session_state.get("logged_in"):
         with st.form("junior_signup_form"):
             reg_invite = st.text_input(
                 "School Registration Code",
-                placeholder="e.g. DA-JUNIOR-2026",
+                placeholder="e.g. DA-TUITION-2026",
                 help="Ask your senior administrator for the school registration code.",
             ).strip()
             reg_name = st.text_input("Full Name", placeholder="e.g. Sarah Connor").strip()
