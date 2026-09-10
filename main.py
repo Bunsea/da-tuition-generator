@@ -16,7 +16,9 @@ import ast
 import operator as _op
 from urllib.parse import unquote
 from PIL import Image
-from datetime import datetime
+import hashlib
+import json
+from datetime import datetime, timezone
 
 try:
     from zoneinfo import ZoneInfo
@@ -183,6 +185,7 @@ def save_to_supabase(
     cost=None,
     model=None,
     extra_instructions="",
+    created_by="",
 ):
     if not supabase_client:
         return False, "Supabase is not connected. Missing URL or Key."
@@ -274,10 +277,13 @@ def save_to_supabase(
             data_to_save["extra_instructions"] = clean_instr
             data_to_save["instructions"] = clean_instr
 
+        if created_by:
+            data_to_save["created_by"] = str(created_by).strip()
+
         def _execute_update(row_id):
             for payload in [
                 data_to_save,
-                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions")},
+                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by")},
                 data,
             ]:
                 try:
@@ -290,7 +296,7 @@ def save_to_supabase(
         def _execute_insert():
             for payload in [
                 data_to_save,
-                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions")},
+                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by")},
                 data,
             ]:
                 try:
@@ -1064,12 +1070,123 @@ def friendly_error_message(exc: Exception) -> str:
     return "Something went wrong while generating the exam. Please try again, or contact tech support if this keeps happening."
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# TEACHER ACCOUNTS & AUTHENTICATION MODULE
+# ══════════════════════════════════════════════════════════════════════════════
+TEACHER_REGISTRY_PATH = "_system/teachers_registry.json"
+PASSWORD_SALT = "DA_TUITION_ACADEMY_2026_SECURE_SALT"
+SCHOOL_INVITE_CODE = "DA-JUNIOR-2026"
+
+
+def _hash_password(password: str) -> str:
+    return hashlib.sha256((password + PASSWORD_SALT).encode("utf-8")).hexdigest()
+
+
+def _load_teachers_registry() -> dict:
+    """Loads dictionary of junior teachers from cloud storage."""
+    if not supabase_client:
+        return {}
+    try:
+        res = supabase_client.storage.from_("exam-files").download(TEACHER_REGISTRY_PATH)
+        if res:
+            return json.loads(res.decode("utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _save_teachers_registry(registry: dict) -> bool:
+    """Persists dictionary of junior teachers to cloud storage."""
+    if not supabase_client:
+        return False
+    try:
+        data = json.dumps(registry, indent=2).encode("utf-8")
+        supabase_client.storage.from_("exam-files").upload(
+            TEACHER_REGISTRY_PATH,
+            data,
+            {"content-type": "application/json", "upsert": "true"},
+        )
+        return True
+    except Exception as e:
+        _log_error("_save_teachers_registry", e)
+        return False
+
+
+def _register_teacher(username: str, password: str, display_name: str, api_key: str = "", role: str = "junior") -> tuple[bool, str]:
+    u = username.strip().lower()
+    if not u or not password:
+        return False, "Username and password cannot be empty."
+    if len(password) < 4:
+        return False, "Password must be at least 4 characters long."
+    registry = _load_teachers_registry()
+    if u in registry or u in ("admin", "senior", "root"):
+        return False, f"Username '{u}' is already taken. Please choose another."
+    registry[u] = {
+        "username": u,
+        "display_name": display_name.strip() or u.capitalize(),
+        "password_hash": _hash_password(password),
+        "role": role,
+        "api_key": api_key.strip(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if _save_teachers_registry(registry):
+        return True, "Account created successfully!"
+    return False, "Failed to save account to cloud storage. Please try again."
+
+
+def _update_teacher_api_key(username: str, api_key: str) -> bool:
+    u = username.strip().lower()
+    registry = _load_teachers_registry()
+    if u in registry:
+        registry[u]["api_key"] = api_key.strip()
+        return _save_teachers_registry(registry)
+    return False
+
+
+def _delete_teacher(username: str) -> bool:
+    u = username.strip().lower()
+    registry = _load_teachers_registry()
+    if u in registry:
+        del registry[u]
+        return _save_teachers_registry(registry)
+    return False
+
+
+def _reset_teacher_password(username: str, new_password: str) -> bool:
+    u = username.strip().lower()
+    registry = _load_teachers_registry()
+    if u in registry:
+        registry[u]["password_hash"] = _hash_password(new_password)
+        return _save_teachers_registry(registry)
+    return False
+
+
+def _mask_api_key(key: str) -> str:
+    if not key:
+        return "Not configured"
+    if len(key) <= 8:
+        return "••••••••"
+    return f"{key[:6]}••••••••{key[-4:]}"
+
+
 def _get_genai_client():
-    """Builds the Gemini client, stopping with a clear message if the key is missing."""
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        st.error("⚠️ The AI engine isn't configured (missing API key on the server). Please contact tech support before using the generator.")
-        st.stop()
+    """Builds the Gemini client using role-specific API keys.
+    Junior teachers strictly use their own API key to preserve school credits.
+    Senior teachers use the server master API key.
+    """
+    user_role = st.session_state.get("user_role", "senior")
+    if user_role == "junior":
+        api_key = (st.session_state.get("user_api_key") or "").strip()
+        if not api_key:
+            st.error("⚠️ Missing personal Gemini API key. Please connect your API key in the sidebar.")
+            st.stop()
+    else:
+        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            api_key = (st.session_state.get("user_api_key") or "").strip()
+        if not api_key:
+            st.error("⚠️ The AI engine isn't configured (missing server API key). Please contact tech support before using the generator.")
+            st.stop()
     return genai.Client(api_key=api_key)
 
 
@@ -1117,15 +1234,233 @@ with col2:
 
 st.markdown("---")
 
+# ──────────────────────────────────────────────────────────────────────────────
+# AUTHENTICATION & LOGIN GATE
+# ──────────────────────────────────────────────────────────────────────────────
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+if "user_role" not in st.session_state:
+    st.session_state["user_role"] = None
+if "username" not in st.session_state:
+    st.session_state["username"] = None
+if "user_display_name" not in st.session_state:
+    st.session_state["user_display_name"] = None
+if "user_api_key" not in st.session_state:
+    st.session_state["user_api_key"] = None
+
+if not st.session_state.get("logged_in"):
+    st.markdown("### 🔐 Teacher Login Portal")
+    st.caption("Please sign in to access the question generator and cloud exam library.")
+
+    login_tab1, login_tab2, login_tab3 = st.tabs([
+        "🧑‍🏫 Junior Teacher Login",
+        "👑 Senior / Admin Access",
+        "✨ New Junior Teacher Sign Up",
+    ])
+
+    with login_tab1:
+        st.markdown("##### Sign In with Your Teacher Account")
+        with st.form("junior_login_form"):
+            login_user = st.text_input("Username", placeholder="e.g. john_doe").strip()
+            login_pwd = st.text_input("Password", type="password")
+            submit_login = st.form_submit_button("Log In", type="primary", use_container_width=True)
+
+            if submit_login:
+                if not login_user or not login_pwd:
+                    st.error("Please enter both your username and password.")
+                else:
+                    registry = _load_teachers_registry()
+                    user_record = registry.get(login_user.lower())
+                    if not user_record:
+                        st.error(f"No account found for username '{login_user}'. Please sign up if you are a new teacher.")
+                    elif user_record.get("password_hash") != _hash_password(login_pwd):
+                        st.error("Incorrect password. Please try again.")
+                    else:
+                        st.session_state["logged_in"] = True
+                        st.session_state["user_role"] = user_record.get("role", "junior")
+                        st.session_state["username"] = user_record.get("username", login_user.lower())
+                        st.session_state["user_display_name"] = user_record.get("display_name", login_user.capitalize())
+                        st.session_state["user_api_key"] = user_record.get("api_key", "")
+                        st.success(f"Welcome back, {st.session_state['user_display_name']}!")
+                        time.sleep(0.4)
+                        st.rerun()
+
+    with login_tab2:
+        st.markdown("##### Senior Teacher & Admin Master Login")
+        with st.form("senior_login_form"):
+            master_pwd = st.text_input("Master Password or Admin PIN", type="password")
+            submit_master = st.form_submit_button("Log In as Senior Teacher", type="primary", use_container_width=True)
+
+            if submit_master:
+                if master_pwd in ("DA2026", "DA_ADMIN"):
+                    st.session_state["logged_in"] = True
+                    st.session_state["user_role"] = "senior"
+                    st.session_state["username"] = "admin"
+                    st.session_state["user_display_name"] = "Senior Teacher"
+                    st.session_state["user_api_key"] = os.environ.get("GEMINI_API_KEY", "")
+                    st.session_state["admin_pin"] = "DA_ADMIN"
+                    st.success("Senior Teacher access granted!")
+                    time.sleep(0.4)
+                    st.rerun()
+                else:
+                    st.error("Incorrect password or PIN.")
+
+    with login_tab3:
+        st.markdown("##### Register New Junior Teacher Account")
+        with st.form("junior_signup_form"):
+            reg_invite = st.text_input(
+                "School Registration Code",
+                placeholder="e.g. DA-JUNIOR-2026",
+                help="Ask your senior administrator for the school registration code.",
+            ).strip()
+            reg_name = st.text_input("Full Name", placeholder="e.g. Sarah Connor").strip()
+            reg_user = st.text_input("Desired Username", placeholder="e.g. sarah_c").strip()
+            reg_pwd1 = st.text_input("Password (min 4 characters)", type="password")
+            reg_pwd2 = st.text_input("Confirm Password", type="password")
+            reg_key = st.text_input(
+                "Your Gemini API Key (Optional now — you can also add it after logging in)",
+                type="password",
+                placeholder="AIzaSy...",
+            ).strip()
+            submit_reg = st.form_submit_button("Create Account", type="primary", use_container_width=True)
+
+            if submit_reg:
+                if reg_invite != SCHOOL_INVITE_CODE:
+                    st.error("Invalid School Registration Code. Please check with your senior teacher.")
+                elif not reg_name or not reg_user:
+                    st.error("Please enter your name and choose a username.")
+                elif reg_pwd1 != reg_pwd2:
+                    st.error("Passwords do not match.")
+                elif len(reg_pwd1) < 4:
+                    st.error("Password must be at least 4 characters.")
+                else:
+                    success, msg = _register_teacher(reg_user, reg_pwd1, reg_name, api_key=reg_key, role="junior")
+                    if success:
+                        st.session_state["logged_in"] = True
+                        st.session_state["user_role"] = "junior"
+                        st.session_state["username"] = reg_user.lower()
+                        st.session_state["user_display_name"] = reg_name
+                        st.session_state["user_api_key"] = reg_key
+                        st.success(f"Account created successfully! Welcome, {reg_name}.")
+                        time.sleep(0.8)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+    with st.sidebar:
+        if os.path.exists(LOGO_PATH):
+            st.image(LOGO_PATH, width="stretch")
+        st.info("👋 Welcome! Please log in on the main screen to continue.")
+
+    st.stop()
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FIRST-TIME API KEY ONBOARDING FOR JUNIOR TEACHERS
+# ──────────────────────────────────────────────────────────────────────────────
+if st.session_state.get("user_role") == "junior" and not st.session_state.get("user_api_key"):
+    st.warning(f"👋 Welcome, **{st.session_state['user_display_name']}**! One quick step before you begin.")
+    st.markdown("""
+    To ensure fair use and protect the school's shared resources, junior teachers generate worksheets using their own personal Google Gemini API key.
+    
+    **How to get your free Gemini API key in 30 seconds:**
+    1. Open [Google AI Studio (Get API Key)](https://aistudio.google.com/app/apikey) in a new tab.
+    2. Sign in with your Google account and click **"Create API Key"**.
+    3. Copy the key (starts with `AIzaSy...`) and paste it below.
+    
+    *(Your key is securely saved to your account — you will only ever have to enter this once).*
+    """)
+
+    with st.form("connect_key_form"):
+        new_k = st.text_input("Paste your Google Gemini API Key:", type="password", placeholder="AIzaSy...").strip()
+        submit_k = st.form_submit_button("🔒 Save & Connect API Key", type="primary", use_container_width=True)
+
+        if submit_k:
+            if not new_k or not new_k.startswith("AIza"):
+                st.error("Please enter a valid Gemini API key (it starts with 'AIzaSy...').")
+            else:
+                _update_teacher_api_key(st.session_state["username"], new_k)
+                st.session_state["user_api_key"] = new_k
+                st.success("✅ API key connected successfully! Loading generator...")
+                time.sleep(0.8)
+                st.rerun()
+
+    with st.sidebar:
+        if os.path.exists(LOGO_PATH):
+            st.image(LOGO_PATH, width="stretch")
+        st.markdown("---")
+        st.caption(f"👤 **{st.session_state['user_display_name']}** (Junior Teacher)")
+        if st.button("🚪 Log Out", key="logout_btn_no_key"):
+            st.session_state.clear()
+            st.rerun()
+
+    st.stop()
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SIDEBAR LOGGED IN PROFILE & CONTROLS
+# ──────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     if os.path.exists(LOGO_PATH):
         st.image(LOGO_PATH, width="stretch")
     st.markdown("---")
-    password = st.text_input("Enter Password", type="password")
-    if password != "DA2026":
-        st.info("Enter the password to access the generator.")
-        st.stop()
-    st.success("Access granted!")
+
+    role_badge = "👑 Senior Teacher" if st.session_state.get("user_role") == "senior" else "🧑‍🏫 Junior Teacher"
+    st.markdown(f"👤 **{st.session_state.get('user_display_name', 'Teacher')}**")
+    st.caption(f"Role: {role_badge}")
+
+    if st.session_state.get("user_role") == "junior":
+        with st.expander("🔑 My Gemini API Key"):
+            masked = _mask_api_key(st.session_state.get("user_api_key", ""))
+            st.caption(f"**Connected Key:** `{masked}`")
+            st.caption("All your worksheet generation strictly uses your personal API credits.")
+            new_k_input = st.text_input("Update API Key", type="password", placeholder="AIzaSy...", key="update_key_input").strip()
+            if st.button("Save New Key", key="save_new_key_btn", use_container_width=True):
+                if new_k_input and new_k_input.startswith("AIza"):
+                    _update_teacher_api_key(st.session_state["username"], new_k_input)
+                    st.session_state["user_api_key"] = new_k_input
+                    st.success("API key updated successfully!")
+                    st.rerun()
+                else:
+                    st.error("Please enter a valid key starting with 'AIza'.")
+            st.markdown("[Get a Gemini API Key](https://aistudio.google.com/app/apikey)")
+
+    if st.session_state.get("user_role") == "senior":
+        with st.expander("👥 Manage Junior Teachers"):
+            registry = _load_teachers_registry()
+            if not registry:
+                st.caption("No junior teacher accounts registered yet.")
+            else:
+                st.caption(f"**{len(registry)} Registered Junior Teacher(s):**")
+                for u, u_info in list(registry.items()):
+                    k_status = "🔑 Connected" if u_info.get("api_key") else "⚠️ No Key"
+                    st.markdown(f"• **{u_info.get('display_name', u)}** (`@{u}`) · {k_status}")
+
+                st.markdown("---")
+                st.caption("Manage Account:")
+                sel_teacher = st.selectbox(
+                    "Select Teacher",
+                    list(registry.keys()),
+                    format_func=lambda x: f"{registry[x].get('display_name', x)} (@{x})",
+                    key="sel_admin_teacher",
+                )
+                c_del, c_rst = st.columns(2)
+                with c_del:
+                    if st.button("🗑️ Remove", key=f"del_teacher_{sel_teacher}", use_container_width=True):
+                        _delete_teacher(sel_teacher)
+                        st.toast(f"Removed @{sel_teacher}")
+                        st.rerun()
+                with c_rst:
+                    rst_pwd = st.text_input("New Password", type="password", key=f"rst_pwd_{sel_teacher}", placeholder="New pass")
+                    if st.button("🔑 Reset", key=f"btn_rst_{sel_teacher}", use_container_width=True):
+                        if rst_pwd and len(rst_pwd) >= 4:
+                            _reset_teacher_password(sel_teacher, rst_pwd)
+                            st.toast(f"Password reset for @{sel_teacher}")
+                            st.rerun()
+                        else:
+                            st.error("Min 4 characters.")
+
+    if st.button("🚪 Log Out", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
 
     # Quick diagnostic so deployment issues (missing pdflatex/pandoc) are obvious
     _pdflatex_ok = shutil.which("pdflatex") is not None
@@ -1145,9 +1480,10 @@ with st.sidebar:
             help="Specific focus or requirements for this exam. Saved with the exam in the library.",
         )
 
-    st.markdown("---")
-    with st.expander("🔐 Admin Access"):
-        st.text_input("Admin PIN", type="password", key="admin_pin")
+    if st.session_state.get("user_role") == "senior":
+        st.markdown("---")
+        with st.expander("🔐 Admin PIN"):
+            st.text_input("Admin PIN", type="password", key="admin_pin", value="DA_ADMIN")
 
 
 def _get_exam_cost_info(exam: dict) -> tuple[float, str]:
@@ -1291,7 +1627,8 @@ if app_mode == "📚 Exam Library":
                     cost_badge = f"${cost_val:.4f}"
                     with st.expander(f"📝 {exam['topic']} ({exam['subject']} - {exam['year_group']}{lvl_str_lib})  ·  💸 {cost_badge}"):
                         sydney_timestamp = get_sydney_time(exam.get("created_at", ""))
-                        st.caption(f"📅 **Generated:** {sydney_timestamp} &nbsp;&nbsp;|&nbsp;&nbsp; 💸 **Cost:** {cost_badge} &nbsp;&nbsp;|&nbsp;&nbsp; 🤖 **Engine:** `{model_val}`")
+                        teacher_name = exam.get("created_by") or "Senior Teacher"
+                        st.caption(f"📅 **Generated:** {sydney_timestamp} &nbsp;&nbsp;|&nbsp;&nbsp; 👤 **Teacher:** {teacher_name} &nbsp;&nbsp;|&nbsp;&nbsp; 💸 **Cost:** {cost_badge} &nbsp;&nbsp;|&nbsp;&nbsp; 🤖 **Engine:** `{model_val}`")
 
                         e_col1, e_col2, e_col3 = st.columns([2, 2, 1])
                         if exam.get("pdf_url"):
@@ -2103,6 +2440,7 @@ if st.session_state.questions_text:
                     cost=st.session_state.get("meta_total_cost"),
                     model=st.session_state.get("meta_model_used"),
                     extra_instructions=st.session_state.get("meta_extra_instructions", ""),
+                    created_by=st.session_state.get("user_display_name", "Senior Teacher"),
                 )
                 if success:
                     st.session_state.cloud_saved = True
@@ -2127,6 +2465,7 @@ if st.session_state.questions_text:
                         cost=st.session_state.get("meta_total_cost"),
                         model=st.session_state.get("meta_model_used"),
                         extra_instructions=st.session_state.get("meta_extra_instructions", ""),
+                        created_by=st.session_state.get("user_display_name", "Senior Teacher"),
                     )
                     if success:
                         st.session_state.cloud_saved = True
