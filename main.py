@@ -1828,7 +1828,7 @@ if app_mode == "📚 Exam Library":
                         sol_badge = "✅ With Solutions" if has_sol else "📋 No Solutions"
                         st.caption(f"📅 **Generated:** {sydney_timestamp} &nbsp;&nbsp;|&nbsp;&nbsp; 👤 **Teacher:** {teacher_name} &nbsp;&nbsp;|&nbsp;&nbsp; 💸 **Cost:** {cost_badge} &nbsp;&nbsp;|&nbsp;&nbsp; 🤖 **Engine:** `{model_val}` &nbsp;&nbsp;|&nbsp;&nbsp; 📄 **{sol_badge}**")
 
-                        e_col1, e_col2, e_col3, e_col4 = st.columns([2, 2, 1, 1])
+                        e_col1, e_col2, e_col3, e_col4 = st.columns([2, 2, 2, 1])
                         if exam.get("pdf_url"):
                             e_col1.markdown(f"[📥 Download PDF]({exam['pdf_url']})")
                         if exam.get("docx_url"):
