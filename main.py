@@ -186,6 +186,9 @@ def save_to_supabase(
     model=None,
     extra_instructions="",
     created_by="",
+    has_solutions=False,
+    questions_text="",
+    answers_text="",
 ):
     if not supabase_client:
         return False, "Supabase is not connected. Missing URL or Key."
@@ -216,10 +219,15 @@ def save_to_supabase(
     short_diff = level_map.get(diff, diff) if diff else ""
     lvl_text = f" {short_diff}" if short_diff else ""
     safe_topic = clean_topic.replace("/", "-").replace("\\", "-")
-    file_base = f"{safe_topic} Set {set_num}{dist_str} - {yr_short} {subject}{lvl_text}"
+    # Append 'w sol' suffix to filename when fully worked solutions are included
+    sol_tag = " w sol" if has_solutions else ""
+    file_base = f"{safe_topic} Set {set_num}{sol_tag}{dist_str} - {yr_short} {subject}{lvl_text}"
     pdf_path = f"{subject}/{year}/{file_base}.pdf"
     docx_path = f"{subject}/{year}/{file_base}.docx"
     instr_path = f"{subject}/{year}/{file_base}_instructions.txt"
+    questions_path = f"{subject}/{year}/{file_base}_questions.txt"
+    answers_path = f"{subject}/{year}/{file_base}_answers.txt"
+
 
     try:
         supabase_client.storage.from_("exam-files").upload(
@@ -254,6 +262,26 @@ def save_to_supabase(
             except Exception as e:
                 _log_error("save_instructions_storage", e)
 
+        # Save questions and answers as companion files for later solution generation
+        if questions_text:
+            try:
+                supabase_client.storage.from_("exam-files").upload(
+                    questions_path,
+                    str(questions_text).encode("utf-8"),
+                    {"content-type": "text/plain; charset=utf-8", "upsert": "true"},
+                )
+            except Exception as e:
+                _log_error("save_questions_storage", e)
+        if answers_text:
+            try:
+                supabase_client.storage.from_("exam-files").upload(
+                    answers_path,
+                    str(answers_text).encode("utf-8"),
+                    {"content-type": "text/plain; charset=utf-8", "upsert": "true"},
+                )
+            except Exception as e:
+                _log_error("save_answers_storage", e)
+
         data = {
             "subject": subject,
             "year_group": year,
@@ -280,9 +308,13 @@ def save_to_supabase(
         if created_by:
             data_to_save["created_by"] = str(created_by).strip()
 
+        # Store has_solutions flag so library can show solution status
+        data_to_save["has_solutions"] = bool(has_solutions)
+
         def _execute_update(row_id):
             for payload in [
                 data_to_save,
+                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by", "has_solutions")},
                 {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by")},
                 data,
             ]:
@@ -296,6 +328,7 @@ def save_to_supabase(
         def _execute_insert():
             for payload in [
                 data_to_save,
+                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by", "has_solutions")},
                 {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by")},
                 data,
             ]:
@@ -1565,6 +1598,169 @@ def save_exam_instructions(exam_id: str, pdf_url: str, instructions_text: str) -
         pass
     return True
 
+
+def _get_exam_content_from_storage(pdf_url: str) -> tuple[str, str]:
+    """Download the questions and answers companion files stored alongside the PDF.
+    Returns (questions_text, answers_text).  Either or both may be empty."""
+    q_text, a_text = "", ""
+    if not pdf_url or not supabase_client:
+        return q_text, a_text
+    try:
+        base_path = unquote(pdf_url.split("/exam-files/")[-1].split("?")[0])
+        if not base_path.endswith(".pdf"):
+            return q_text, a_text
+        stem = base_path[:-4]
+        try:
+            res_q = supabase_client.storage.from_("exam-files").download(stem + "_questions.txt")
+            if res_q:
+                q_text = res_q.decode("utf-8").strip()
+        except Exception:
+            pass
+        try:
+            res_a = supabase_client.storage.from_("exam-files").download(stem + "_answers.txt")
+            if res_a:
+                a_text = res_a.decode("utf-8").strip()
+        except Exception:
+            pass
+    except Exception as e:
+        _log_error("_get_exam_content_from_storage", e)
+    return q_text, a_text
+
+
+def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
+    """Generate fully worked solutions for an existing library exam, rebuild its PDF
+    with solutions appended, and re-upload to cloud.  Returns (success, message)."""
+    pdf_url = exam.get("pdf_url", "")
+    q_text, a_text = _get_exam_content_from_storage(pdf_url)
+    if not q_text:
+        return False, "Cannot generate solutions — the original questions were not stored with this exam. This feature only works for exams saved after this update."
+
+    try:
+        client = _get_genai_client()
+
+        sol_prompt = (
+            "You are a senior mathematics examiner. Below are the exam questions and their answer key in LaTeX.\n\n"
+            "===QUESTIONS===\n" + q_text + "\n===END QUESTIONS===\n\n"
+            "===ANSWERS===\n" + a_text + "\n===END ANSWERS===\n\n"
+            "Generate step-by-step FULLY WORKED SOLUTIONS for every question above.\n"
+            "Place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===.\n"
+            "Rules:\n"
+            "- Use LaTeX formatting (enumerate, align, etc.).\n"
+            "- Show all key mathematical steps.\n"
+            "- Group trivial algebra.\n"
+            "- Do NOT regenerate the questions or answers — only generate the solutions.\n"
+            "- Do NOT generate \\documentclass, \\usepackage, \\begin{document}, \\end{document}.\n"
+        )
+
+        gen_config = types.GenerateContentConfig(
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+            tools=[types.Tool(code_execution=types.ToolCodeExecution())],
+            safety_settings=[
+                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+            ],
+        )
+
+        models_to_try = ["gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
+        s_out = None
+        for model_name in models_to_try:
+            try:
+                st.toast(f"🧠 {model_name}: Solving equations...")
+                res = client.models.generate_content(model=model_name, contents=[sol_prompt], config=gen_config)
+                if not res or not res.text or "LATEX_SOLUTIONS_END" not in res.text:
+                    raise ValueError("Solutions truncated. Retrying...")
+                s_out = res.text.replace("```latex", "").replace("```", "")
+                break
+            except Exception as e:
+                if _is_retryable(e):
+                    st.toast(f"🚦 {model_name} busy. Pivoting...")
+                    continue
+                raise e
+
+        if not s_out:
+            return False, "All AI models failed to generate solutions. Please try again later."
+
+        s_m = re.search(r"===?\s*LATEX_SOLUTIONS_START\s*===?(.*?)(?:===?\s*LATEX_SOLUTIONS_END\s*===?|$)", s_out, re.DOTALL | re.IGNORECASE)
+        s_sanitized = sanitize_ai_latex(s_m.group(1).strip() if s_m else "Failed.")
+
+        # Reconstruct topic and title from DB record
+        topic_str = exam.get("topic", "Unknown")
+        subject = exam.get("subject", "Maths")
+        year = exam.get("year_group", "Year 12")
+        diff = exam.get("difficulty", "")
+        lvl_str = f" {diff}" if diff else ""
+        title = f"{year} {subject}{lvl_str}".strip()
+
+        # Parse set number and clean topic from the stored topic string
+        set_m = re.search(r"\bSet\s*(\d+)\b", topic_str, re.IGNORECASE)
+        set_num = int(set_m.group(1)) if set_m else 1
+        clean_topic = re.sub(r"\s*\(Yr\d+\)\s*Set\s*\d+.*", "", topic_str).strip()
+        display_topic = f"{clean_topic} Set {set_num}"
+
+        # Count total questions for marks estimation
+        total_q = len(re.findall(r"\\item", q_text))
+        if total_q == 0:
+            total_q = 20
+
+        # Build the updated PDF with solutions
+        work_dir = tempfile.mkdtemp(prefix="da_lib_sol_")
+        try:
+            pdf_bytes, tex_bytes, word_bytes, log, word_reason = _render_exam_files(
+                work_dir, display_topic, title, q_text, a_text, s_sanitized, total_q
+            )
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+        if not pdf_bytes:
+            return False, f"PDF compilation failed: {log}"
+
+        # Parse distribution from topic string
+        dist_m = re.search(r"\((\d+\s+MC.*?)\)", topic_str)
+        num_mc = num_easy = num_med = num_hard = num_xh = 0
+        if dist_m:
+            dist_text = dist_m.group(1)
+            mc_m = re.search(r"(\d+)\s*MC", dist_text, re.IGNORECASE)
+            easy_m = re.search(r"(\d+)\s*Easy", dist_text, re.IGNORECASE)
+            med_m = re.search(r"(\d+)\s*Medium", dist_text, re.IGNORECASE)
+            hard_m = re.search(r"(\d+)\s*Hard", dist_text, re.IGNORECASE)
+            xh_m = re.search(r"(\d+)\s*Ext", dist_text, re.IGNORECASE)
+            if mc_m: num_mc = int(mc_m.group(1))
+            if easy_m: num_easy = int(easy_m.group(1))
+            if med_m: num_med = int(med_m.group(1))
+            if hard_m: num_hard = int(hard_m.group(1))
+            if xh_m: num_xh = int(xh_m.group(1))
+
+        # Re-save to cloud with solutions
+        success, save_result = save_to_supabase(
+            clean_topic, subject, year, diff, set_num,
+            pdf_bytes, word_bytes,
+            num_mc=num_mc, num_easy=num_easy, num_med=num_med,
+            num_hard=num_hard, num_xh=num_xh,
+            existing_id=exam.get("id"),
+            cost=exam.get("cost"),
+            model=exam.get("model"),
+            extra_instructions=exam.get("extra_instructions") or exam.get("instructions") or "",
+            created_by=exam.get("created_by", ""),
+            has_solutions=True,
+            questions_text=q_text,
+            answers_text=a_text,
+        )
+
+        if success:
+            # Update has_solutions flag in DB
+            for col in ("has_solutions",):
+                try:
+                    supabase_client.table("saved_exams").update({col: True}).eq("id", exam.get("id")).execute()
+                except Exception:
+                    pass
+            return True, "Solutions generated and exam updated successfully!"
+        return False, f"Solutions generated but failed to save: {save_result}"
+    except Exception as e:
+        return False, f"Error generating solutions: {str(e)}"
+
+
 if app_mode == "📚 Exam Library":
     st.header("📚 Exam Library")
     if not supabase_client:
@@ -1628,15 +1824,28 @@ if app_mode == "📚 Exam Library":
                     with st.expander(f"📝 {exam['topic']} ({exam['subject']} - {exam['year_group']}{lvl_str_lib})  ·  💸 {cost_badge}"):
                         sydney_timestamp = get_sydney_time(exam.get("created_at", ""))
                         teacher_name = exam.get("created_by") or "Senior Teacher"
-                        st.caption(f"📅 **Generated:** {sydney_timestamp} &nbsp;&nbsp;|&nbsp;&nbsp; 👤 **Teacher:** {teacher_name} &nbsp;&nbsp;|&nbsp;&nbsp; 💸 **Cost:** {cost_badge} &nbsp;&nbsp;|&nbsp;&nbsp; 🤖 **Engine:** `{model_val}`")
+                        has_sol = exam.get("has_solutions", False)
+                        sol_badge = "✅ With Solutions" if has_sol else "📋 No Solutions"
+                        st.caption(f"📅 **Generated:** {sydney_timestamp} &nbsp;&nbsp;|&nbsp;&nbsp; 👤 **Teacher:** {teacher_name} &nbsp;&nbsp;|&nbsp;&nbsp; 💸 **Cost:** {cost_badge} &nbsp;&nbsp;|&nbsp;&nbsp; 🤖 **Engine:** `{model_val}` &nbsp;&nbsp;|&nbsp;&nbsp; 📄 **{sol_badge}**")
 
-                        e_col1, e_col2, e_col3 = st.columns([2, 2, 1])
+                        e_col1, e_col2, e_col3, e_col4 = st.columns([2, 2, 1, 1])
                         if exam.get("pdf_url"):
                             e_col1.markdown(f"[📥 Download PDF]({exam['pdf_url']})")
                         if exam.get("docx_url"):
                             e_col2.markdown(f"[📄 Download Word Doc]({exam['docx_url']})")
 
-                        if e_col3.button("🗑️ Delete", key=f"del_{exam['id']}"):
+                        if not has_sol:
+                            if e_col3.button("🧠 Generate Solutions", key=f"gen_sol_{exam['id']}", type="primary"):
+                                with st.spinner("🤖 Generating fully worked solutions... This may take a minute."):
+                                    ok, msg = _generate_solutions_for_library_exam(exam)
+                                    if ok:
+                                        st.success(f"✅ {msg}")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    else:
+                                        st.error(f"⚠️ {msg}")
+
+                        if e_col4.button("🗑️ Delete", key=f"del_{exam['id']}"):
                             with st.spinner("Deleting from Cloud..."):
                                 paths_to_delete = []
                                 if exam.get("pdf_url"):
@@ -1644,6 +1853,8 @@ if app_mode == "📚 Exam Library":
                                     paths_to_delete.append(p_path)
                                     if p_path.endswith(".pdf"):
                                         paths_to_delete.append(p_path[:-4] + "_instructions.txt")
+                                        paths_to_delete.append(p_path[:-4] + "_questions.txt")
+                                        paths_to_delete.append(p_path[:-4] + "_answers.txt")
                                 if exam.get("docx_url"):
                                     paths_to_delete.append(unquote(exam["docx_url"].split("/exam-files/")[-1].split("?")[0]))
 
@@ -2441,6 +2652,9 @@ if st.session_state.questions_text:
                     model=st.session_state.get("meta_model_used"),
                     extra_instructions=st.session_state.get("meta_extra_instructions", ""),
                     created_by=st.session_state.get("user_display_name", "Senior Teacher"),
+                    has_solutions=bool(st.session_state.solutions_text),
+                    questions_text=st.session_state.questions_text or "",
+                    answers_text=st.session_state.answers_text or "",
                 )
                 if success:
                     st.session_state.cloud_saved = True
@@ -2466,6 +2680,9 @@ if st.session_state.questions_text:
                         model=st.session_state.get("meta_model_used"),
                         extra_instructions=st.session_state.get("meta_extra_instructions", ""),
                         created_by=st.session_state.get("user_display_name", "Senior Teacher"),
+                        has_solutions=True,
+                        questions_text=st.session_state.questions_text or "",
+                        answers_text=st.session_state.answers_text or "",
                     )
                     if success:
                         st.session_state.cloud_saved = True
@@ -2539,7 +2756,8 @@ if st.session_state.questions_text:
 
     yr_short = _y.replace("Year ", "Yr")
     lvl_part = f" {_d}" if _d else ""
-    safe_name = f"{_t.replace('/', '_')} Set {_set}{dist_str} - {yr_short} {_s}{lvl_part}"
+    sol_suffix = " w sol" if st.session_state.solutions_text else ""
+    safe_name = f"{_t.replace('/', '_')} Set {_set}{sol_suffix}{dist_str} - {yr_short} {_s}{lvl_part}"
 
     dl1, dl2, dl3 = st.columns(3)
     with dl1:
