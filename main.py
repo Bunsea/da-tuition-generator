@@ -1502,7 +1502,12 @@ with st.sidebar:
 
     st.markdown("---")
     app_modes = ["✨ Generator", "📚 Exam Library"]
-    app_mode = st.radio("App Mode", app_modes, key="main_app_mode")
+    # If a library button set the redirect flag, honour it by setting the
+    # default index *before* the widget is instantiated (you cannot assign
+    # to a widget-bound key after the widget has rendered).
+    _redirect_mode = st.session_state.pop("_redirect_to_generator", False)
+    _default_idx = 0 if _redirect_mode else app_modes.index(st.session_state.get("main_app_mode", "✨ Generator")) if st.session_state.get("main_app_mode") in app_modes else 0
+    app_mode = st.radio("App Mode", app_modes, index=_default_idx, key="main_app_mode")
     st.markdown("---")
     if app_mode == "✨ Generator":
         st.header("⚙️ Advanced Settings")
@@ -1885,7 +1890,7 @@ if app_mode == "📚 Exam Library":
                             with c_reuse:
                                 if st.button("✨ Load Instructions into Generator", key=f"reuse_instr_{exam['id']}", type="primary", use_container_width=True):
                                     st.session_state["extra_instructions_input"] = instr_text
-                                    st.session_state["main_app_mode"] = "✨ Generator"
+                                    st.session_state["_redirect_to_generator"] = True
                                     st.rerun()
 
                         with st.expander("✏️ Edit Instructions" if instr_text else "➕ Add Instructions / Notes"):
