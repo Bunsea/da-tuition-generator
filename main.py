@@ -1341,11 +1341,6 @@ if not st.session_state.get("logged_in"):
     with login_tab3:
         st.markdown("##### Register New Junior Teacher Account")
         with st.form("junior_signup_form"):
-            reg_invite = st.text_input(
-                "School Registration Code",
-                placeholder="e.g. DA-TUITION-2026",
-                help="Ask your senior administrator for the school registration code.",
-            ).strip()
             reg_name = st.text_input("Full Name", placeholder="e.g. Sarah Connor").strip()
             reg_user = st.text_input("Desired Username", placeholder="e.g. sarah_c").strip()
             reg_pwd1 = st.text_input("Password (min 4 characters)", type="password")
@@ -1358,9 +1353,7 @@ if not st.session_state.get("logged_in"):
             submit_reg = st.form_submit_button("Create Account", type="primary", use_container_width=True)
 
             if submit_reg:
-                if reg_invite != SCHOOL_INVITE_CODE:
-                    st.error("Invalid School Registration Code. Please check with your senior teacher.")
-                elif not reg_name or not reg_user:
+                if not reg_name or not reg_user:
                     st.error("Please enter your name and choose a username.")
                 elif reg_pwd1 != reg_pwd2:
                     st.error("Passwords do not match.")
