@@ -1346,9 +1346,10 @@ if not st.session_state.get("logged_in"):
             reg_pwd1 = st.text_input("Password (min 4 characters)", type="password")
             reg_pwd2 = st.text_input("Confirm Password", type="password")
             reg_key = st.text_input(
-                "Your Gemini API Key (Optional now — you can also add it after logging in)",
+                "Your Gemini API Key (Required)",
                 type="password",
                 placeholder="AIzaSy...",
+                help="Get your free API key at https://aistudio.google.com/apikey",
             ).strip()
             submit_reg = st.form_submit_button("Create Account", type="primary", use_container_width=True)
 
@@ -1359,6 +1360,8 @@ if not st.session_state.get("logged_in"):
                     st.error("Passwords do not match.")
                 elif len(reg_pwd1) < 4:
                     st.error("Password must be at least 4 characters.")
+                elif not reg_key:
+                    st.error("A Gemini API Key is required to generate exams. Get one free at https://aistudio.google.com/apikey")
                 else:
                     success, msg = _register_teacher(reg_user, reg_pwd1, reg_name, api_key=reg_key, role="junior")
                     if success:
