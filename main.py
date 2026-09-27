@@ -1524,7 +1524,7 @@ def _get_exam_cost_info(exam: dict) -> tuple[float, str]:
     """Extract stored cost or compute an accurate estimate using Gemini 3.7 Flash rates."""
     if exam.get("cost") is not None:
         try:
-            return float(exam["cost"]), exam.get("model") or "gemini-3.7-flash"
+            return float(exam["cost"]), exam.get("model") or "gemini-3.8-flash"
         except (ValueError, TypeError):
             pass
 
@@ -1544,9 +1544,9 @@ def _get_exam_cost_info(exam: dict) -> tuple[float, str]:
     est_in_tokens = 6500
     est_out_tokens = (num_mc * 120) + (num_fr * 250) + 500
 
-    # Gemini 3.7 Flash current published pricing: $0.75 / 1M in, $3.75 / 1M out
+    # Gemini 3.8 Flash current published pricing: $0.75 / 1M in, $3.75 / 1M out
     est_cost = ((est_in_tokens / 1_000_000) * 0.75) + ((est_out_tokens / 1_000_000) * 3.75)
-    return round(est_cost, 5), exam.get("model") or "gemini-3.7-flash"
+    return round(est_cost, 5), exam.get("model") or "gemini-3.8-flash"
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -1664,7 +1664,7 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
             ],
         )
 
-        models_to_try = ["gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
+        models_to_try = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash"]
         s_out = None
         for model_name in models_to_try:
             try:
@@ -2366,7 +2366,7 @@ When instructed, your final combined output must follow this template structure 
                             "   - Reverse-engineer the mechanics, phrasing, difficulty, and diagram styles of those exact questions, and generate original parallel practice questions testing the same competency."
                         )
 
-                    models_to_try = ["gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
+                    models_to_try = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash"]
                     last_error = None
 
                     for model_name in models_to_try:
@@ -2586,7 +2586,7 @@ if st.session_state.questions_text:
                         "\n\nPHASE 2 INSTRUCTION: Excellent. Now, generate the step-by-step fully worked solutions for these EXACT questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===. Group trivial algebra. Show all key mathematical steps.",
                     ]
 
-                    models_to_try = ["gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
+                    models_to_try = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash"]
                     s_out = None
                     last_error = None
                     for model_name in models_to_try:
