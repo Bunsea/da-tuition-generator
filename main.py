@@ -1236,6 +1236,13 @@ st.markdown(
     <style>
         .stApp { background-color: #EAF6FF; }
         [data-testid="stHeader"] { background-color: transparent; }
+        /* Hide Streamlit Community Cloud top toolbar (Fork button, GitHub icon, and dev menu) */
+        [data-testid="stToolbar"] { visibility: hidden !important; display: none !important; }
+        .stAppDeployButton { display: none !important; }
+        [data-testid="stAppDeployButton"] { display: none !important; }
+        #MainMenu { visibility: hidden !important; }
+        footer { visibility: hidden !important; }
+        [data-testid="stDecoration"] { display: none !important; }
         html, body, p, span, label, input, textarea, button, 
         [data-testid="stWidgetLabel"] p, .stMarkdown p, .stButton button, 
         div[role="listbox"], div[role="combobox"] span, .stSelectbox div, .stMultiSelect div { font-size: 18px !important; }
