@@ -1230,19 +1230,33 @@ st.set_page_config(
     page_title="DA Tuition Generator",
     page_icon=LOGO_PATH if os.path.exists(LOGO_PATH) else "📚",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 st.markdown(
     """
     <style>
         .stApp { background-color: #EAF6FF; }
         [data-testid="stHeader"] { background-color: transparent; }
-        /* Hide Streamlit Community Cloud top toolbar (Fork button, GitHub icon, and dev menu) */
-        [data-testid="stToolbar"] { visibility: hidden !important; display: none !important; }
-        .stAppDeployButton { display: none !important; }
-        [data-testid="stAppDeployButton"] { display: none !important; }
-        #MainMenu { visibility: hidden !important; }
-        footer { visibility: hidden !important; }
-        [data-testid="stDecoration"] { display: none !important; }
+        /* Ensure the sidebar open button (>> in top-left) is always visible and clickable */
+        [data-testid="collapsedControl"],
+        [data-testid="stSidebarCollapsedControl"],
+        button[data-testid="stSidebarCollapseButton"] {
+            display: flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            color: #31333F !important;
+            z-index: 999999 !important;
+        }
+        /* Hide ONLY the Streamlit Community Cloud Fork button, GitHub link, and 3-dots menu */
+        .stAppDeployButton,
+        [data-testid="stAppDeployButton"],
+        header a[href*="github.com"],
+        #MainMenu,
+        footer,
+        [data-testid="stDecoration"] {
+            display: none !important;
+            visibility: hidden !important;
+        }
         html, body, p, span, label, input, textarea, button, 
         [data-testid="stWidgetLabel"] p, .stMarkdown p, .stButton button, 
         div[role="listbox"], div[role="combobox"] span, .stSelectbox div, .stMultiSelect div { font-size: 18px !important; }
