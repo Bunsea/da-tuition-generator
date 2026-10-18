@@ -734,6 +734,19 @@ def sanitize_ai_latex(text: str) -> str:
     # 11. Fix "Missing \item" if \vspace appears immediately after \begin{enumerate} or \begin{itemize}
     text = re.sub(r"(\\begin\{(?:enumerate|itemize)\})\s*\\vspace\*?\{[^}]+\}\s*", r"\1\n", text)
 
+    # 11b. Fix \tag / \tag* in $$ or math environments which causes "! Package amsmath Error: \tag not allowed here."
+    def _fix_tag(m):
+        has_star = m.group(1) == "*"
+        content = (m.group(2) or m.group(3) or "").strip()
+        if has_star:
+            return rf"\qquad \text{{{content}}}"
+        else:
+            if content.startswith("(") and content.endswith(")"):
+                return rf"\qquad \text{{{content}}}"
+            return rf"\qquad \text{{({content})}}"
+
+    text = re.sub(r"\\tag(\*?)[ \t\r\n]*(?:\{([^}]+)\}|(\([0-9A-Za-z*+\-\.]+\)|[0-9A-Za-z*+\-\.]+))", _fix_tag, text)
+
     # 12. Rescue orphaned TikZ / pgfplots commands outside of \begin{tikzpicture}
     _TIKZ_CMD_RE = re.compile(
         r"\\(?:draw|fill|filldraw|path|node|foreach|coordinate|clip|shade|shadedraw|addplot)\b|\\begin\{axis\}"
@@ -1016,6 +1029,24 @@ def build_latex_pdf(display_topic, header_title, content, answers, solutions, to
             ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", filename],
             cwd=work_dir, capture_output=True, text=True,
         )
+        if not os.path.exists(pdf_filename):
+            # Recovery pass: check if failure was due to \tag or similar amsmath errors
+            if proc.stdout and ("tag not allowed" in proc.stdout or "amsmath Error: \\tag" in proc.stdout):
+                with open(filename, "r", encoding="utf-8") as f:
+                    curr_tex = f.read()
+                fixed_tex = re.sub(
+                    r"\\tag\*?[ \t\r\n]*(?:\{([^}]+)\}|(\([0-9A-Za-z*+\-\.]+\)|[0-9A-Za-z*+\-\.]+))",
+                    lambda m: rf"\qquad \text{{{m.group(1) or m.group(2) or ''}}}",
+                    curr_tex,
+                )
+                with open(filename, "w", encoding="utf-8") as f:
+                    f.write(fixed_tex)
+                tex_bytes = fixed_tex.encode("utf-8")
+                proc = subprocess.run(
+                    ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", filename],
+                    cwd=work_dir, capture_output=True, text=True,
+                )
+
         if os.path.exists(pdf_filename):
             with open(pdf_filename, "rb") as f:
                 return f.read(), tex_bytes, ""
@@ -1672,6 +1703,7 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
             "- Group trivial algebra.\n"
             "- Do NOT regenerate the questions or answers — only generate the solutions.\n"
             "- Do NOT generate \\documentclass, \\usepackage, \\begin{document}, \\end{document}.\n"
+            "- Do NOT use \\tag inside $$ ... $$; use \\qquad (1) if numbering equations.\n"
         )
 
         gen_config = types.GenerateContentConfig(
@@ -2604,7 +2636,7 @@ if st.session_state.questions_text:
 
                     p2_payload = st.session_state.saved_ai_payload + [
                         st.session_state.phase_1_raw,
-                        "\n\nPHASE 2 INSTRUCTION: Excellent. Now, generate the step-by-step fully worked solutions for these EXACT questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===. Group trivial algebra. Show all key mathematical steps.",
+                        "\n\nPHASE 2 INSTRUCTION: Excellent. Now, generate the step-by-step fully worked solutions for these EXACT questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===. Group trivial algebra. Show all key mathematical steps. Never use \\tag inside $$ ... $$ or \\[ ... \\]; use \\qquad (1) if numbering equations.",
                     ]
 
                     models_to_try = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash"]
