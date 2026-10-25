@@ -2172,13 +2172,12 @@ if generate_btn:
         syllabus_ban = ""
         if subject == "Maths":
             universal_ban = (
-                " CRITICAL NESA SYLLABUS BANS (ALL MATHS COURSES): NEVER generate questions on obsolete pre-2019 topics: "
-                "(1) t-method / t-formulae (t = tan(x/2) substitutions), "
-                "(2) Product-to-Sum or Sum-to-Product trigonometric identities, "
-                "(3) Locus / Focus-Directrix parabola geometry (e.g. x^2 = 4ay, chords of contact, parametric tangents/normals), "
-                "(4) Euclidean Circle Geometry proofs (alternate segment, cyclic quadrilaterals, intersecting chords), "
-                "(5) Division of an interval in a given ratio (internal/external division), "
-                "(6) Simpson's Rule."
+                " CRITICAL NESA SYLLABUS BANS (ALL MATHS COURSES): "
+                "(1) PIGEONHOLE PRINCIPLE IS STRICTLY BANNED — NEVER generate questions on or using the Pigeonhole Principle in ANY year or level (completely removed from the syllabus). "
+                "(2) Locus / Focus-Directrix parabola geometry (e.g. x^2 = 4ay, chords of contact, parametric tangents/normals), "
+                "(3) Euclidean Circle Geometry proofs (alternate segment, cyclic quadrilaterals, intersecting chords), "
+                "(4) Division of an interval in a given ratio (internal/external division), "
+                "(5) Simpson's Rule."
             )
             
             level_ban = ""
@@ -2186,36 +2185,61 @@ if generate_btn:
                 level_ban = (
                     " CRITICAL ADVANCED LEVEL BANS: "
                     "(1) 3D TRIGONOMETRY IS STRICTLY BANNED — Year 11 & 12 Advanced only covers 2D Trigonometry (Sine rule, Cosine rule, Area of triangle, Radians). 3D Trigonometry is exclusively an Extension 1 topic. "
-                    "(2) DO NOT include Extension 1/2 topics: Compound/Double Angles (sin(A+B), cos(2A)), Auxiliary angle method (Rcos(x-a)), Inverse Trig functions, Polynomial division / Remainder theorem / Sum and product of roots, Combinatorics / Permutations & Combinations, Vectors, Projectile Motion, Mathematical Induction, Perpendicular Distance formula, Angle between two lines."
+                    "(2) DO NOT include Extension 1/2 topics: t-method / t-formulae (t = tan(x/2)), Product-to-sum / sum-to-product (differences) identities, Compound/Double Angles (sin(A+B), cos(2A)), Auxiliary angle method (Rcos(x-a)), Inverse Trig functions, Polynomial division / Remainder theorem / Sum and product of roots, Combinatorics / Permutations & Combinations, Vectors, Projectile Motion, Mathematical Induction, Perpendicular Distance formula, Angle between two lines."
                 )
             elif actual_level == "Standard":
                 level_ban = (
-                    " CRITICAL STANDARD LEVEL BANS: 3D Trigonometry is STRICTLY BANNED. NO Calculus, NO Radians, NO Advanced Polynomials, NO Logarithm laws, NO Compound/Double angle trigonometry. Keep all math strictly within the NSW Mathematics Standard syllabus."
+                    " CRITICAL STANDARD LEVEL BANS: 3D Trigonometry is STRICTLY BANNED. NO Calculus, NO Radians, NO Advanced Polynomials, NO Logarithm laws, NO Compound/Double angle trigonometry, NO t-method/t-formulae, NO product-to-sum identities. Keep all math strictly within the NSW Mathematics Standard syllabus."
                 )
             elif actual_level in ["Extension", "Extension 1"]:
                 level_ban = (
                     " EXTENSION 1 SYLLABUS RULES: 3D Trigonometry IS ALLOWED & REQUIRED for 3D trig topics (ME-T1). "
-                    "REMEMBER: t-formulae, product-to-sum identities, Euclidean circle proofs, and division of an interval are completely obsolete and strictly banned in Extension 1. "
-                    "DO NOT include Extension 2 topics (Complex Numbers, Proof by Contradiction/Contrapositive, Integration by Parts, Volumes by Cylindrical Shells, 3D Vectors, Mechanics)."
+                    "CRITICAL EXTENSION 1 TRIGONOMETRY BANS: "
+                    "- The t-method / t-formulae (t = tan(theta/2)) and product-to-sum and sum-to-product (differences) trigonometric identities are NO LONGER part of Year 11 or Year 12 Maths Extension 1! They belong EXCLUSIVELY in Maths Extension 2. NEVER generate t-method, t-formulae, or product-to-sum/difference questions in Extension 1. "
+                    "- REMEMBER: Euclidean circle proofs, division of an interval, and the Pigeonhole Principle are strictly banned in Extension 1. "
+                    "- DO NOT include Extension 2 topics (Complex Numbers, Proof by Contradiction/Contrapositive, Integration by Parts, Volumes by Cylindrical Shells, 3D Vectors, Mechanics)."
                 )
             elif actual_level in ["Extension 2"]:
                 level_ban = (
-                    " EXTENSION 2 SYLLABUS RULES: Follow the post-2019 Mathematics Extension 2 syllabus: Proof (Nature of Proof), Vectors (3D Vectors), Complex Numbers, Calculus (Further Integration, Volumes by Slicing & Cylindrical Shells), Mechanics (Resisted Motion, Simple Harmonic Motion). DO NOT include obsolete pre-2019 topics like Conics or Harder Circle Geometry."
+                    " EXTENSION 2 SYLLABUS RULES: Follow the Mathematics Extension 2 syllabus: Proof (Nature of Proof), Vectors (3D Vectors), Complex Numbers, Calculus (Further Integration, Volumes by Slicing & Cylindrical Shells), Mechanics (Resisted Motion, Simple Harmonic Motion). "
+                    "NOTE ON TRIGONOMETRY: The t-method / t-formulae (t = tan(x/2) substitutions) and product-to-sum and sum-to-product (differences) trigonometric identities belong EXCLUSIVELY in Maths Extension 2 (e.g. in Further Integration and Advanced Proofs/Identities). "
+                    "CRITICAL EXTENSION 2 BANS: The Pigeonhole Principle is STRICTLY BANNED across all courses including Extension 2. DO NOT include obsolete pre-2019 topics like Conics or Harder Circle Geometry."
                 )
             
             yr_ban = ""
             if "Year 11" in year_group and "Year 12" not in year_group:
                 if actual_level == "Standard":
                     yr_ban = (
-                        " YEAR 11 STANDARD BOUNDARIES: DO NOT generate Year 12 Standard topics (Normal Distribution, Z-scores, Annuities, Depreciation, Critical Path Analysis, Networks, Bivariate Data). DO NOT require manual calculation of standard deviation."
+                        " YEAR 11 STANDARD BOUNDARIES: "
+                        "(1) NETWORKING / NETWORK CONCEPTS IS NOW IN YEAR 11 STANDARD: Networks, vertices, edges, degrees, directed/undirected graphs, walks, trails, paths, circuits, cycles, Eulerian and Hamiltonian paths/circuits, trees, minimum spanning trees (Prim's algorithm), and shortest paths are explicitly INCLUDED in Year 11 Maths Standard. "
+                        "(2) RELATIVE FREQUENCY MOVED TO YEAR 12: DO NOT generate Relative Frequency in Year 11 Maths Standard (Relative Frequency has moved to Year 12 Maths Standard). "
+                        "(3) DO NOT generate Year 12 Standard topics: Normal Distribution, Z-scores, Annuities, Depreciation, Critical Path Analysis, Bivariate Data. DO NOT require manual calculation of standard deviation."
                     )
                 elif actual_level == "Advanced":
                     yr_ban = (
-                        " YEAR 11 ADVANCED BOUNDARIES: DO NOT generate Year 12 Advanced topics: NO Integration / Area under curves / Volumes of revolution, NO Financial Mathematics (Superannuation, Annuities, Series loan repayments), NO Continuous Random Variables / Normal Distribution, NO Bivariate Data Analysis, NO Calculus applications to exponentials or trigonometrics. Year 11 differentiation is strictly limited to First Principles, Power Rule on polynomials, and basic Tangents/Normals."
+                        " YEAR 11 ADVANCED BOUNDARIES: "
+                        "(1) DATA IS INCLUDED IN YEAR 11 ADVANCED: Single-variable data analysis, summary statistics (mean, median, mode, range, IQR, standard deviation), quartiles, box plots, frequency histograms, and identifying outliers are explicitly part of Year 11 Maths Advanced. "
+                        "(2) NO DISCRETE PROBABILITY DISTRIBUTIONS: Discrete Probability Distributions and Discrete Random Variables are STRICTLY BANNED from Year 11 Maths Advanced (no probability distribution tables, no expected value E(X) or Var(X) of discrete random variables). "
+                        "(3) DO NOT generate Year 12 Advanced topics: NO Integration / Area under curves / Volumes of revolution, NO Financial Mathematics (Superannuation, Annuities, Series loan repayments), NO Continuous Random Variables / Normal Distribution, NO Bivariate Data Analysis, NO Calculus applications to exponentials or trigonometrics. Year 11 differentiation is strictly limited to First Principles, Power Rule on polynomials, and basic Tangents/Normals."
                     )
                 elif actual_level in ["Extension", "Extension 1"]:
                     yr_ban = (
-                        " YEAR 11 EXTENSION 1 BOUNDARIES: DO NOT generate Year 12 Extension 1 topics: NO Proof by Mathematical Induction, NO Projectile Motion (Vectors), NO Trigonometric Equations via Auxiliary Angle Rcos(x-a), NO Differential Equations / Exponential Growth, NO Calculus of Inverse Trig Functions, NO Binomial Distribution / Normal Approximation. Year 11 Ext 1 is strictly limited to Functions & Polynomials, Further Trigonometry (3D Trig, Compound/Double angles), Permutations & Combinations, Vectors in 2D, and Rates of Change."
+                        " YEAR 11 EXTENSION 1 BOUNDARIES: "
+                        "(1) NO PIGEONHOLE PRINCIPLE: The Pigeonhole Principle is strictly banned and removed from Year 11 Extension 1 Combinatorics. "
+                        "(2) NO t-method or product-to-sum/difference trig identities (these are exclusively Extension 2). "
+                        "(3) DO NOT generate Year 12 Extension 1 topics: NO Proof by Mathematical Induction, NO Projectile Motion (Vectors), NO Trigonometric Equations via Auxiliary Angle Rcos(x-a), NO Differential Equations / Exponential Growth, NO Calculus of Inverse Trig Functions, NO Binomial Distribution / Normal Approximation. Year 11 Ext 1 is strictly limited to Functions & Polynomials, Further Trigonometry (3D Trig, Compound/Double angles), Permutations & Combinations (without Pigeonhole Principle), Vectors in 2D, and Rates of Change."
+                    )
+            elif "Year 12" in year_group:
+                if actual_level == "Standard":
+                    yr_ban = (
+                        " YEAR 12 STANDARD BOUNDARIES: "
+                        "(1) RELATIVE FREQUENCY IS IN YEAR 12 STANDARD: Relative frequency, experimental probability, multi-stage events, simulations, and expected frequency belong in Year 12 Maths Standard. "
+                        "(2) NETWORK CONCEPTS MOVED TO YEAR 11: Basic Network Concepts (vertices, edges, walks, Eulerian/Hamiltonian, minimum spanning trees, shortest paths) belongs in Year 11 Maths Standard. Year 12 Standard covers Critical Path Analysis (CPA) / Project Planning."
+                    )
+                elif actual_level in ["Extension", "Extension 1"]:
+                    yr_ban = (
+                        " YEAR 12 EXTENSION 1 BOUNDARIES: "
+                        "REMEMBER: NO t-method / t-formulae and NO product-to-sum or sum-to-product difference trig identities in Year 12 Extension 1 (they are exclusively in Extension 2). NO Pigeonhole Principle."
                     )
                     
             syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {actual_level} syllabus.{universal_ban}{level_ban}{yr_ban}"
