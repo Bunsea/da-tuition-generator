@@ -2219,7 +2219,7 @@ if generate_btn:
                     yr_ban = (
                         " YEAR 11 ADVANCED BOUNDARIES: "
                         "(1) DATA IS INCLUDED IN YEAR 11 ADVANCED: Single-variable data analysis, summary statistics (mean, median, mode, range, IQR, standard deviation), quartiles, box plots, frequency histograms, and identifying outliers are explicitly part of Year 11 Maths Advanced. "
-                        "(2) NO DISCRETE PROBABILITY DISTRIBUTIONS: Discrete Probability Distributions and Discrete Random Variables are STRICTLY BANNED from Year 11 Maths Advanced (no probability distribution tables, no expected value E(X) or Var(X) of discrete random variables). "
+                        "(2) NO DISCRETE PROBABILITY DISTRIBUTIONS: Discrete Probability Distributions and Discrete Random Variables are STRICTLY BANNED from Year 11 Maths Advanced (they belong in Year 12 Maths Advanced). "
                         "(3) DO NOT generate Year 12 Advanced topics: NO Integration / Area under curves / Volumes of revolution, NO Financial Mathematics (Superannuation, Annuities, Series loan repayments), NO Continuous Random Variables / Normal Distribution, NO Bivariate Data Analysis, NO Calculus applications to exponentials or trigonometrics. Year 11 differentiation is strictly limited to First Principles, Power Rule on polynomials, and basic Tangents/Normals."
                     )
                 elif actual_level in ["Extension", "Extension 1"]:
@@ -2235,6 +2235,11 @@ if generate_btn:
                         " YEAR 12 STANDARD BOUNDARIES: "
                         "(1) RELATIVE FREQUENCY IS IN YEAR 12 STANDARD: Relative frequency, experimental probability, multi-stage events, simulations, and expected frequency belong in Year 12 Maths Standard. "
                         "(2) NETWORK CONCEPTS MOVED TO YEAR 11: Basic Network Concepts (vertices, edges, walks, Eulerian/Hamiltonian, minimum spanning trees, shortest paths) belongs in Year 11 Maths Standard. Year 12 Standard covers Critical Path Analysis (CPA) / Project Planning."
+                    )
+                elif actual_level == "Advanced":
+                    yr_ban = (
+                        " YEAR 12 ADVANCED BOUNDARIES: "
+                        "DISCRETE PROBABILITY DISTRIBUTIONS IS INCLUDED IN YEAR 12 ADVANCED: Discrete Probability Distributions, discrete random variables, probability mass functions P(X = x), probability distribution tables, expected value E(X) = mu, and variance Var(X) = sigma^2 are explicitly part of Year 12 Maths Advanced (alongside Continuous Probability Distributions and Normal Distribution)."
                     )
                 elif actual_level in ["Extension", "Extension 1"]:
                     yr_ban = (
