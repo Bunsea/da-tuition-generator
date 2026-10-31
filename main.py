@@ -1291,6 +1291,41 @@ st.markdown(
         html, body, p, span, label, input, textarea, button, 
         [data-testid="stWidgetLabel"] p, .stMarkdown p, .stButton button, 
         div[role="listbox"], div[role="combobox"] span, .stSelectbox div, .stMultiSelect div { font-size: 18px !important; }
+        /* Ensure selectbox & multiselect dropdown popovers expand to fit long topic text and wrap cleanly */
+        div[data-baseweb="popover"] {
+            min-width: fit-content !important;
+            width: max-content !important;
+            max-width: min(750px, 95vw) !important;
+        }
+        div[data-baseweb="popover"] div[data-baseweb="menu"],
+        div[data-baseweb="popover"] ul[role="listbox"],
+        div[data-testid="stSelectboxVirtualDropdown"] {
+            min-width: 100% !important;
+            width: max-content !important;
+            max-width: min(750px, 95vw) !important;
+        }
+        div[data-baseweb="popover"] li[role="option"],
+        div[data-baseweb="popover"] div[role="option"],
+        div[role="listbox"] [role="option"],
+        ul[role="listbox"] li {
+            white-space: normal !important;
+            word-break: normal !important;
+            overflow-wrap: break-word !important;
+            height: auto !important;
+            min-height: 42px !important;
+            line-height: 1.4 !important;
+            padding-top: 8px !important;
+            padding-bottom: 8px !important;
+        }
+        div[data-baseweb="popover"] li[role="option"] > div,
+        div[data-baseweb="popover"] li[role="option"] span,
+        div[data-baseweb="popover"] [role="option"] * {
+            white-space: normal !important;
+            overflow: visible !important;
+            text-overflow: unset !important;
+            word-break: normal !important;
+            overflow-wrap: break-word !important;
+        }
         h1 { font-size: 2.6rem !important; font-weight: 700 !important; }
         h2 { font-size: 2.2rem !important; font-weight: 700 !important; }
         h3 { font-size: 1.8rem !important; font-weight: 600 !important; }
@@ -1834,7 +1869,7 @@ if app_mode == "📚 Exam Library":
             # --- NEW SEARCH BAR ---
             search_query = st.text_input("Search exams by keyword...", placeholder="Type to search topics, subjects, or levels...", label_visibility="collapsed")
             
-            f_col1, f_col2, f_col3, f_col4 = st.columns(4)
+            f_col1, f_col2, f_col3, f_col4 = st.columns([1, 1, 2.5, 1.2])
             with f_col1:
                 filter_subject = st.selectbox("Subject", available_subjects)
             with f_col2:
