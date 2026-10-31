@@ -193,6 +193,9 @@ def save_to_supabase(
     if not supabase_client:
         return False, "Supabase is not connected. Missing URL or Key."
 
+    if not pdf_bytes:
+        return False, "Cannot archive exam: PDF file is empty or compilation failed."
+
     dist_parts = []
     if num_mc:
         dist_parts.append(f"{num_mc} MC")
@@ -714,9 +717,8 @@ def sanitize_ai_latex(text: str) -> str:
     # 5. Fix markdown bold **text** -> \textbf{text}
     text = re.sub(r"\*\*(.*?)\*\*", r"\\textbf{\1}", text)
 
-    # 6. Fix command argument typos where '{...>' was written instead of '{...}'
-    for _ in range(3):
-        text = re.sub(r"(\\[a-zA-Z*]+(?:\[[^\]\n]*\])?(?:\{[^{}\n]*\})*)\{([^{}\n]*?)>", r"\1{\2}", text)
+    # 6. Fix command argument typos where '{...>' was written instead of '{...}' (only spacing/dimension commands; never touch math/text where '>' is greater-than)
+    text = re.sub(r"(\\(?:vspace\*?|hspace\*?|rule))\{([0-9\.\-\s]+(?:cm|mm|pt|in|em|ex)?)>", r"\1{\2}", text)
 
     # 7. Fix \begin[env] / \end[env] or \begin(env) / \end(env)
     text = re.sub(r"\\(begin|end)\[([a-zA-Z*]+)\]", r"\\\1{\2}", text)
@@ -1046,6 +1048,20 @@ def build_latex_pdf(display_topic, header_title, content, answers, solutions, to
                     ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", filename],
                     cwd=work_dir, capture_output=True, text=True,
                 )
+
+            if not os.path.exists(pdf_filename) and proc.stdout and ("Extra }" in proc.stdout or "forgotten $" in proc.stdout):
+                with open(filename, "r", encoding="utf-8") as f:
+                    curr_tex = f.read()
+                # Repair premature closing brace before math comparisons, e.g. '($x } 1$)' -> '($x > 1$)'
+                fixed_tex = re.sub(r"(\$[a-zA-Z0-9\s\+\-\*\/]+)\s*\}\s*([0-9a-zA-Z]+[^\$]*\$)", r"\1 > \2", curr_tex)
+                if fixed_tex != curr_tex:
+                    with open(filename, "w", encoding="utf-8") as f:
+                        f.write(fixed_tex)
+                    tex_bytes = fixed_tex.encode("utf-8")
+                    proc = subprocess.run(
+                        ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", filename],
+                        cwd=work_dir, capture_output=True, text=True,
+                    )
 
         if os.path.exists(pdf_filename):
             with open(pdf_filename, "rb") as f:
@@ -2767,7 +2783,9 @@ if st.session_state.questions_text:
                         st.code(str(e))
 
     # ── CLOUD LIBRARY SAVE / OVERWRITE ──────────────────────────────────────────
-    if not st.session_state.cloud_saved:
+    if not st.session_state.pdf_bytes:
+        st.warning("⚠️ PDF compilation did not produce a valid file. Please review the compiler log below.")
+    elif not st.session_state.cloud_saved:
         save_btn_label = "💾 Save Exam (with Solutions) to Cloud Library" if st.session_state.solutions_text else "💾 Save Exam to Cloud Library"
         if st.button(save_btn_label, type="secondary"):
             with st.spinner("☁️ Archiving to database..."):
