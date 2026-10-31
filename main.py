@@ -1291,6 +1291,17 @@ st.markdown(
         html, body, p, span, label, input, textarea, button, 
         [data-testid="stWidgetLabel"] p, .stMarkdown p, .stButton button, 
         div[role="listbox"], div[role="combobox"] span, .stSelectbox div, .stMultiSelect div { font-size: 18px !important; }
+        /* Completely hide "Press Enter to apply" overlay inside input boxes to prevent text overlap */
+        [data-testid="InputInstructions"],
+        [data-testid="stInputInstructions"],
+        .stInputInstructions {
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+            width: 0 !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+        }
         /* Ensure selectbox & multiselect dropdown popovers expand to fit long topic text and wrap cleanly */
         div[data-baseweb="popover"] {
             min-width: fit-content !important;
