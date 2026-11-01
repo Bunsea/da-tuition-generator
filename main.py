@@ -1318,40 +1318,51 @@ st.markdown(
             opacity: 0 !important;
             pointer-events: none !important;
         }
-        /* Ensure selectbox & multiselect dropdown popovers expand to fit long topic text and wrap cleanly */
+        /* Keep dropdown popovers neat, properly aligned to their selectboxes, and bounded */
         div[data-baseweb="popover"] {
-            min-width: fit-content !important;
-            width: max-content !important;
-            max-width: min(750px, 95vw) !important;
+            max-width: min(550px, 90vw) !important;
         }
         div[data-baseweb="popover"] div[data-baseweb="menu"],
         div[data-baseweb="popover"] ul[role="listbox"],
         div[data-testid="stSelectboxVirtualDropdown"] {
-            min-width: 100% !important;
-            width: max-content !important;
-            max-width: min(750px, 95vw) !important;
+            max-width: min(550px, 90vw) !important;
         }
         div[data-baseweb="popover"] li[role="option"],
         div[data-baseweb="popover"] div[role="option"],
         div[role="listbox"] [role="option"],
         ul[role="listbox"] li {
-            white-space: normal !important;
-            word-break: normal !important;
-            overflow-wrap: break-word !important;
+            white-space: nowrap !important;
+            text-overflow: ellipsis !important;
+            overflow: hidden !important;
             height: auto !important;
-            min-height: 42px !important;
+            min-height: 38px !important;
             line-height: 1.4 !important;
-            padding-top: 8px !important;
-            padding-bottom: 8px !important;
+            padding-top: 6px !important;
+            padding-bottom: 6px !important;
         }
         div[data-baseweb="popover"] li[role="option"] > div,
         div[data-baseweb="popover"] li[role="option"] span,
         div[data-baseweb="popover"] [role="option"] * {
-            white-space: normal !important;
-            overflow: visible !important;
-            text-overflow: unset !important;
-            word-break: normal !important;
-            overflow-wrap: break-word !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+        }
+        div[data-baseweb="popover"] [role="option"]:hover,
+        ul[role="listbox"] li:hover {
+            background-color: #f0f4f9 !important;
+            cursor: pointer !important;
+        }
+        /* Completely hide 0-height custom components used for JS helpers */
+        [data-testid="stCustomComponentV1"]:has(iframe[height="0"]),
+        iframe[title="st_option_tooltip"],
+        iframe[srcdoc*="da-tuition-option-tooltip"] {
+            position: absolute !important;
+            top: -9999px !important;
+            left: -9999px !important;
+            width: 0 !important;
+            height: 0 !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
         }
         h1 { font-size: 2.6rem !important; font-weight: 700 !important; }
         h2 { font-size: 2.2rem !important; font-weight: 700 !important; }
@@ -1362,6 +1373,115 @@ st.markdown(
     </style>
     """,
     unsafe_allow_html=True,
+)
+
+# ── FLOATING HOVER TOOLTIP INJECTION FOR LONG DROPDOWN OPTIONS ─────────────────
+import streamlit.components.v1 as components
+
+components.html(
+    """
+    <script>
+    (function() {
+        try {
+            const parentDoc = window.parent.document;
+            if (!parentDoc) return;
+
+            // Only initialize listeners once per window session
+            if (parentDoc.__da_tooltip_initialized) return;
+            parentDoc.__da_tooltip_initialized = true;
+
+            let tooltip = parentDoc.getElementById('da-tuition-option-tooltip');
+            if (!tooltip) {
+                tooltip = parentDoc.createElement('div');
+                tooltip.id = 'da-tuition-option-tooltip';
+                tooltip.style.cssText = `
+                    position: fixed;
+                    display: none;
+                    background-color: #1e293b;
+                    color: #ffffff;
+                    font-size: 14px;
+                    font-weight: 500;
+                    line-height: 1.4;
+                    padding: 8px 12px;
+                    border-radius: 8px;
+                    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25), 0 2px 6px rgba(0, 0, 0, 0.15);
+                    border: 1px solid rgba(255, 255, 255, 0.15);
+                    z-index: 99999999;
+                    pointer-events: none;
+                    max-width: 450px;
+                    word-wrap: break-word;
+                    white-space: normal;
+                    transition: opacity 0.12s ease-in-out;
+                    opacity: 0;
+                `;
+                parentDoc.body.appendChild(tooltip);
+            }
+
+            parentDoc.addEventListener('mouseover', function(e) {
+                const opt = e.target.closest('[role="option"], div[data-baseweb="popover"] li, ul[role="listbox"] li, div[data-baseweb="menu"] li');
+                if (opt) {
+                    const text = (opt.innerText || opt.textContent || '').trim();
+                    if (!text) return;
+
+                    // Set title attribute as native fallback
+                    if (!opt.getAttribute('title')) {
+                        opt.setAttribute('title', text);
+                    }
+
+                    // Only show floating tooltip for long or truncated options
+                    const isOverflowing = opt.scrollWidth > (opt.clientWidth + 2) ||
+                                          (opt.firstElementChild && opt.firstElementChild.scrollWidth > (opt.firstElementChild.clientWidth + 2)) ||
+                                          text.length > 22;
+
+                    if (isOverflowing) {
+                        tooltip.textContent = text;
+                        tooltip.style.display = 'block';
+                        tooltip.style.opacity = '1';
+
+                        const rect = opt.getBoundingClientRect();
+                        let left = rect.right + 10;
+                        let top = rect.top + (rect.height / 2) - 16;
+
+                        // If it would overflow right of window, position below or align left
+                        if (left + 360 > window.parent.innerWidth) {
+                            left = Math.max(12, rect.left);
+                            top = rect.bottom + 6;
+                        }
+
+                        // If it would overflow bottom of window, flip above
+                        if (top + 60 > window.parent.innerHeight) {
+                            top = Math.max(10, rect.top - 45);
+                        }
+
+                        tooltip.style.left = left + 'px';
+                        tooltip.style.top = top + 'px';
+                    }
+                }
+            }, true);
+
+            parentDoc.addEventListener('mouseout', function(e) {
+                const opt = e.target.closest('[role="option"], div[data-baseweb="popover"] li, ul[role="listbox"] li, div[data-baseweb="menu"] li');
+                if (opt && tooltip) {
+                    tooltip.style.opacity = '0';
+                    tooltip.style.display = 'none';
+                }
+            }, true);
+
+            parentDoc.addEventListener('click', function() {
+                if (tooltip) {
+                    tooltip.style.opacity = '0';
+                    tooltip.style.display = 'none';
+                }
+            }, true);
+
+        } catch (err) {
+            console.warn("Tooltip injection error:", err);
+        }
+    })();
+    </script>
+    """,
+    height=0,
+    width=0,
 )
 
 col1, col2 = st.columns([1, 3], vertical_alignment="center")
