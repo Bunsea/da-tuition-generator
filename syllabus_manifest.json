@@ -1,0 +1,1127 @@
+{
+  "Year 11 Maths Standard": {
+    "year": "Year 11",
+    "subject": "Maths",
+    "level": "Standard",
+    "textbook": "CambridgeMATHS Stage 6 NSW Mathematics Standard Year 11 (2nd Edition, 2025/2026)",
+    "chapters": [
+      {
+        "num": "1",
+        "name": "Earning Money",
+        "subtopics": [
+          "Using percentages",
+          "Salaries and wages",
+          "Annual leave loading and bonuses",
+          "Penalty rates, overtime and special allowances",
+          "Commission",
+          "Piecework, royalties and government payments",
+          "Gross pay, deductions and net pay",
+          "Allowable tax deductions",
+          "Taxable income",
+          "Medicare levy and income tax payable"
+        ]
+      },
+      {
+        "num": "2",
+        "name": "Formulas and Equations",
+        "subtopics": [
+          "Substitution",
+          "Simplifying and expanding algebraic expressions",
+          "Linear equations",
+          "Using equations to solve worded problems",
+          "Using formulas to solve problems",
+          "Changing the subject of formulas",
+          "Distance, speed, time and stopping distance",
+          "Blood alcohol content (BAC)",
+          "Medication dosages"
+        ]
+      },
+      {
+        "num": "3",
+        "name": "Applications of Measurement",
+        "subtopics": [
+          "Pythagoras theorem in 2D and 3D",
+          "Converting units of measurement",
+          "Scientific notation and significant figures",
+          "Perimeter, circumference and arc length",
+          "Perimeter of composite shapes",
+          "Area of triangles, quadrilaterals, circles and sectors",
+          "Area of composite shapes",
+          "Trapezoidal rule",
+          "Surface area of right prisms and cylinders",
+          "Surface area of spheres and composite solids",
+          "Volume of prisms, cylinders, pyramids, cones and spheres",
+          "Capacity and composite solids"
+        ]
+      },
+      {
+        "num": "4",
+        "name": "Data Analysis 1",
+        "subtopics": [
+          "Statistical investigation process",
+          "Classification of data (categorical vs numerical)",
+          "Population and sample",
+          "Dot plots and stem-and-leaf plots",
+          "Frequency tables and histograms"
+        ]
+      },
+      {
+        "num": "5",
+        "name": "Linear Relationships",
+        "subtopics": [
+          "Graphing linear equations",
+          "Gradient and vertical intercept (y = mx + c)",
+          "Direct variation and linear models"
+        ]
+      },
+      {
+        "num": "6",
+        "name": "Data Analysis 2",
+        "subtopics": [
+          "Mean, median and mode",
+          "Range and interquartile range (IQR)",
+          "Box plots and parallel box plots",
+          "Outliers (1.5 x IQR rule)",
+          "Skewness and data distribution"
+        ]
+      },
+      {
+        "num": "7",
+        "name": "Time and Location",
+        "subtopics": [
+          "Latitude and longitude",
+          "Time zones and UTC/GMT",
+          "Solar time and calculation of time differences"
+        ]
+      },
+      {
+        "num": "8",
+        "name": "Managing Money",
+        "subtopics": [
+          "Simple interest (I = Prn)",
+          "Compound interest and recurrence relations",
+          "Credit cards and store accounts",
+          "Personal loans and comparison rates"
+        ]
+      },
+      {
+        "num": "9",
+        "name": "Networks, Paths and Trees",
+        "subtopics": [
+          "Introduction to networks (vertices, edges, degree)",
+          "Journeys through networks (walks, trails, paths, circuits, cycles)",
+          "Constructing network diagrams from tables",
+          "Eulerian trails/circuits and Hamiltonian paths/cycles",
+          "Spanning trees and minimal connector problems (Prims and Kruskals algorithm)",
+          "Shortest path through a network (Dijkstras algorithm)"
+        ]
+      }
+    ],
+    "inclusions": [
+      "Basic Network Concepts & Minimum Spanning Trees (moved from Year 12 to Year 11 Standard)",
+      "Prims algorithm and Kruskals algorithm for minimal spanning trees",
+      "Eulerian circuits and Hamiltonian paths/cycles"
+    ],
+    "exclusions": [
+      "NO Critical Path Analysis or Network Flow (these belong exclusively in Year 12 Standard)",
+      "NO Relative Frequency (moved to Year 12 Standard)",
+      "NO Normal distribution or Z-scores (Year 12 Standard)",
+      "NO Bivariate data analysis (Year 12 Standard)",
+      "NO Annuities (Year 12 Standard)",
+      "NO 3D Trigonometry or Calculus (strictly banned in Standard)"
+    ]
+  },
+  "Year 11 Maths Advanced": {
+    "year": "Year 11",
+    "subject": "Maths",
+    "level": "Advanced",
+    "textbook": "CambridgeMATHS Stage 6 NSW Mathematics Advanced Year 11 (2nd Edition, 2025/2026)",
+    "chapters": [
+      {
+        "num": "1",
+        "name": "Algebra Review",
+        "subtopics": [
+          "Expanding brackets",
+          "Factoring algebraic expressions",
+          "Algebraic fractions",
+          "Solving quadratic equations",
+          "Solving simultaneous equations"
+        ]
+      },
+      {
+        "num": "2",
+        "name": "Numbers and Surds",
+        "subtopics": [
+          "Real numbers and intervals",
+          "Surds and their arithmetic",
+          "Further simplification of surds",
+          "Rationalising the denominator"
+        ]
+      },
+      {
+        "num": "3",
+        "name": "Functions and Graphs",
+        "subtopics": [
+          "Functions and function notation",
+          "Functions, relations and graphs",
+          "Review of linear graphs",
+          "Quadratic functions and graphs",
+          "Completing the square",
+          "Quadratic formula",
+          "Powers, cubics and circles",
+          "Asymptotes and hyperbolic graphs",
+          "Direct and inverse variation"
+        ]
+      },
+      {
+        "num": "4",
+        "name": "Equations and Inequations",
+        "subtopics": [
+          "Linear equations and inequations",
+          "Quadratic equations and inequations",
+          "The discriminant and nature of roots",
+          "Quadratic identities"
+        ]
+      },
+      {
+        "num": "5",
+        "name": "Transformations and Symmetry",
+        "subtopics": [
+          "Translations of known graphs",
+          "Reflections in x-axis and y-axis",
+          "Even and odd symmetry",
+          "Horizontal and vertical dilations",
+          "The absolute value function",
+          "Composite functions",
+          "Piecewise-defined functions and continuity"
+        ]
+      },
+      {
+        "num": "6",
+        "name": "Trigonometry",
+        "subtopics": [
+          "Right-angled trigonometry",
+          "Trigonometric functions of a general angle",
+          "Quadrant, sign and related acute angles",
+          "Exact values",
+          "Trigonometric identities (tan = sin/cos, sin^2+cos^2=1)",
+          "Trigonometric equations in degrees",
+          "The sine rule and area formula",
+          "The cosine rule",
+          "Problems involving general 2D triangles"
+        ]
+      },
+      {
+        "num": "7",
+        "name": "Lines in the Coordinate Plane",
+        "subtopics": [
+          "Lengths and midpoints of intervals",
+          "Gradients of lines",
+          "Equations of lines (point-gradient, two-point, gradient-intercept)",
+          "Parallel and perpendicular lines"
+        ]
+      },
+      {
+        "num": "8",
+        "name": "Exponential and Logarithmic Functions",
+        "subtopics": [
+          "Index laws and fractional indices",
+          "Logarithms definition and laws",
+          "Equations involving logarithms and indices",
+          "Exponential and logarithmic graphs",
+          "Applications of exponential growth and decay"
+        ]
+      },
+      {
+        "num": "9",
+        "name": "Differentiation",
+        "subtopics": [
+          "Tangents and the derivative as a limit",
+          "First principles differentiation",
+          "Power rule for differentiation",
+          "Chain rule",
+          "Product rule",
+          "Quotient rule",
+          "Rates of change",
+          "Average and instantaneous velocity and speed"
+        ]
+      },
+      {
+        "num": "10",
+        "name": "Eulers Number",
+        "subtopics": [
+          "The exponential function base e (y = e^x)",
+          "Transformations of exponential functions",
+          "The natural logarithmic function (y = ln x)"
+        ]
+      },
+      {
+        "num": "11",
+        "name": "Radian Measure of Angles",
+        "subtopics": [
+          "Radian measure definition and conversions",
+          "Solving trigonometric equations in radians",
+          "Arc length and sector area (l = r theta, A = 1/2 r^2 theta)",
+          "Trigonometric graphs in radians (period, amplitude, phase shifts)"
+        ]
+      },
+      {
+        "num": "12",
+        "name": "Probability",
+        "subtopics": [
+          "Sets and Venn diagrams",
+          "Probability and sample spaces",
+          "Addition theorem for probability",
+          "Multi-stage experiments and tree diagrams",
+          "Conditional probability P(A|B) and independent events"
+        ]
+      },
+      {
+        "num": "13",
+        "name": "Data and Summary Statistics",
+        "subtopics": [
+          "Random variables and frequency tables",
+          "Cumulative frequency and histograms",
+          "Grouped data and frequency polygons",
+          "Measures of central tendency (mean, median, mode)",
+          "Measures of spread (range, IQR, standard deviation)",
+          "Box plots and identification of outliers"
+        ]
+      }
+    ],
+    "inclusions": [
+      "Data & Summary Statistics (Single-variable data analysis, IQR, Box plots, Outliers, Standard deviation is explicitly part of Year 11 Advanced)",
+      "Calculus Introduction (First principles, Power, Chain, Product, Quotient rules on polynomials)"
+    ],
+    "exclusions": [
+      "NO Discrete Probability Distributions (Discrete random variables are strictly in Year 12 Advanced)",
+      "NO Integration, areas under curves or volumes of revolution (Year 12 Advanced)",
+      "NO Financial Mathematics (Superannuation, Annuities, Loan series) (Year 12 Advanced)",
+      "NO Continuous Random Variables or Normal Distribution (Year 12 Advanced)",
+      "NO Bivariate Data Analysis (Year 12 Advanced)",
+      "NO 3D Trigonometry (Extension 1 only)",
+      "NO Vectors (Extension 1 & 2 only)"
+    ]
+  },
+  "Year 11 Maths Extension": {
+    "year": "Year 11",
+    "subject": "Maths",
+    "level": "Extension",
+    "textbook": "CambridgeMATHS Stage 6 NSW Mathematics Extension 1 Year 11 (2nd Edition, 2025/2026)",
+    "chapters": [
+      {
+        "num": "1",
+        "name": "Further Graphs",
+        "subtopics": [
+          "Solving non-linear inequations",
+          "Sign of a function",
+          "Sketching reciprocal functions y = 1/f(x)",
+          "Sketching sums and differences of functions",
+          "Modifying functions using absolute value y = |f(x)| and y = f(|x|)",
+          "Inverse relations and functions f^-1(x)",
+          "Parametric representation of functions and curves"
+        ]
+      },
+      {
+        "num": "2",
+        "name": "Polynomials",
+        "subtopics": [
+          "The language and definitions of polynomials",
+          "Graphs of polynomial functions",
+          "Polynomial long division",
+          "The remainder theorem and factor theorem",
+          "Consequences of factor theorem",
+          "Sums and products of zeroes (roots of polynomials)",
+          "Geometric problems using polynomial techniques"
+        ]
+      },
+      {
+        "num": "3",
+        "name": "Further Trigonometry",
+        "subtopics": [
+          "Three-dimensional trigonometry (ME-T1)",
+          "Trigonometric functions of compound angles sin(A+B), cos(A+B), tan(A+B)",
+          "The double-angle formulae sin(2A), cos(2A), tan(2A)",
+          "Trigonometric equations using identities",
+          "The auxiliary angle method: Expressing a sin x + b cos x in the form R cos(x - alpha) or R sin(x + alpha)"
+        ]
+      },
+      {
+        "num": "4",
+        "name": "Combinatorics",
+        "subtopics": [
+          "Factorial notation",
+          "Ordered selections with and without repetition",
+          "Permutations with restrictions",
+          "Ordered selections with identical elements",
+          "Counting unordered selections (Combinations nCr)",
+          "Using counting techniques in probability",
+          "Arrangements in a circle (n-1)!"
+        ]
+      },
+      {
+        "num": "5",
+        "name": "The Binomial Theorem and Pascals Triangle",
+        "subtopics": [
+          "Binomial expansions and Pascals triangle",
+          "Binomial expansions with several variables",
+          "The Binomial Theorem",
+          "Using the general term T_(r+1) = nCr a^(n-r) b^r",
+          "Identities in Pascals triangle",
+          "Further identities using calculus and substitution"
+        ]
+      },
+      {
+        "num": "6",
+        "name": "Vectors in 2D",
+        "subtopics": [
+          "Directed line segments and definition of 2D vectors",
+          "Component form and column vector notation in 2D",
+          "Magnitude and direction in 2D",
+          "Scalar multiplication and vector addition/subtraction in 2D"
+        ]
+      }
+    ],
+    "inclusions": [
+      "3D Trigonometry (ME-T1)",
+      "Auxiliary angle method (R cos(x - alpha))",
+      "Permutations and Combinations (Combinatorics)"
+    ],
+    "exclusions": [
+      "NO Pigeonhole Principle (strictly banned across all syllabus levels)",
+      "NO t-method / t-formulae (belongs exclusively in Mathematics Extension 2)",
+      "NO product-to-sum or sum-to-product identities (belongs exclusively in Mathematics Extension 2)",
+      "NO Mathematical Induction (Year 12 Extension 1)",
+      "NO Projectile Motion (Year 12 Extension 1)",
+      "NO 3D Vectors (Year 12 Extension 1 & Extension 2)",
+      "NO Vector Proofs (Extension 2 only)",
+      "NO Calculus of Inverse Trig Functions (Year 12 Extension 1)",
+      "NO Differential Equations or Slope Fields (Year 12 Extension 1)",
+      "NO Binomial Distribution or Central Limit Theorem (Year 12 Extension 1)"
+    ]
+  },
+  "Year 12 Maths Standard": {
+    "year": "Year 12",
+    "subject": "Maths",
+    "level": "Standard",
+    "textbook": "CambridgeMATHS Stage 6 NSW Mathematics Standard Year 12 (2nd Edition, 2025/2026)",
+    "chapters": [
+      {
+        "num": "1",
+        "name": "Ratios and Rates",
+        "subtopics": [
+          "Review of ratios and rates",
+          "Rates of change and speed",
+          "Fuel consumption and cost comparisons",
+          "Scale drawings and map reading"
+        ]
+      },
+      {
+        "num": "2",
+        "name": "Relative Frequency and Probability",
+        "subtopics": [
+          "Relative frequency and experimental probability",
+          "Probability trees and multi-stage events",
+          "Simulations and probability models",
+          "Expected frequency"
+        ]
+      },
+      {
+        "num": "3",
+        "name": "Investments and Loans",
+        "subtopics": [
+          "Compound interest investments",
+          "Inflation and purchasing power",
+          "Shares and dividends",
+          "Reducing balance loans and credit"
+        ]
+      },
+      {
+        "num": "4",
+        "name": "Trigonometry",
+        "subtopics": [
+          "Right-angled triangle review",
+          "Sine rule and cosine rule in non-right angled triangles",
+          "Area of general triangles",
+          "Bearings and navigation in two-step problems"
+        ]
+      },
+      {
+        "num": "5",
+        "name": "Simultaneous Linear Equations",
+        "subtopics": [
+          "Solving simultaneous equations graphically",
+          "Solving simultaneous equations algebraically",
+          "Break-even analysis (cost, revenue, profit models)"
+        ]
+      },
+      {
+        "num": "6",
+        "name": "Bivariate Data Analysis",
+        "subtopics": [
+          "Scatter plots and association",
+          "Pearsons correlation coefficient r",
+          "Line of best fit (by eye and least-squares regression)",
+          "Interpolation and extrapolation",
+          "Causation versus correlation"
+        ]
+      },
+      {
+        "num": "7",
+        "name": "Annuities",
+        "subtopics": [
+          "Future value of annuities and recurrence relations",
+          "Present value of annuities",
+          "Calculating regular repayments on loans using tables and formulas"
+        ]
+      },
+      {
+        "num": "8",
+        "name": "Non-Linear Relationships",
+        "subtopics": [
+          "Exponential relationships and exponential growth/decay",
+          "Quadratic models and parabolic trajectories",
+          "Reciprocal functions and inverse variation"
+        ]
+      },
+      {
+        "num": "9",
+        "name": "The Normal Distribution",
+        "subtopics": [
+          "Characteristics of normal distributions",
+          "The empirical rule (68-95-99.7 rule)",
+          "Calculating and interpreting z-scores",
+          "Converting z-scores to actual scores",
+          "Using z-scores to compare data from different distributions"
+        ]
+      },
+      {
+        "num": "10",
+        "name": "Network Flow and Critical Path Analysis",
+        "subtopics": [
+          "Network flow problems and capacities",
+          "Cuts in a flow network and the Minimum Cut - Maximum Flow theorem",
+          "Introduction to Critical Path Analysis (CPA)",
+          "Activity networks and precedence tables",
+          "Dummy activities",
+          "Forward scanning and backward scanning",
+          "Float times (slack time) and the critical path",
+          "Minimum project completion time",
+          "Gantt charts and project scheduling"
+        ]
+      }
+    ],
+    "inclusions": [
+      "Relative Frequency and Probability (Chapter 2)",
+      "Critical Path Analysis and Network Flow (Chapter 10)",
+      "Normal Distribution and Z-scores (Chapter 9)",
+      "Bivariate Data Analysis and Least-squares regression (Chapter 6)",
+      "Annuities (Chapter 7)"
+    ],
+    "exclusions": [
+      "NO Basic Network Concepts (vertices, edges, Prim minimal spanning trees - moved to Year 11 Standard)",
+      "NO Calculus or Differentiation",
+      "NO Radians",
+      "NO 3D Trigonometry"
+    ]
+  },
+  "Year 12 Maths Advanced": {
+    "year": "Year 12",
+    "subject": "Maths",
+    "level": "Advanced",
+    "textbook": "CambridgeMATHS Stage 6 NSW Mathematics Advanced Year 12 (2nd Edition, 2025/2026)",
+    "chapters": [
+      {
+        "num": "1",
+        "name": "Sequences and Series",
+        "subtopics": [
+          "Arithmetic sequences (AP) and nth term",
+          "Geometric sequences (GP) and nth term",
+          "Applications of APs and GPs",
+          "Sum of arithmetic series",
+          "Sum of geometric series",
+          "Limiting sum of infinite geometric series",
+          "Recurring decimals as geometric series"
+        ]
+      },
+      {
+        "num": "2",
+        "name": "Curve-Sketching Using the Derivative",
+        "subtopics": [
+          "Increasing and decreasing functions",
+          "Stationary points and turning points",
+          "Second derivative and concavity",
+          "Points of inflection",
+          "Systematic curve sketching with derivative",
+          "Global maximum and minimum",
+          "Optimization applications in geometry and real-world problems",
+          "Primitive functions"
+        ]
+      },
+      {
+        "num": "3",
+        "name": "Integration",
+        "subtopics": [
+          "Areas and the definite integral",
+          "The Fundamental Theorem of Calculus",
+          "Properties of the definite integral",
+          "Indefinite integrals and standard forms",
+          "Finding areas between a curve and an axis",
+          "Areas of compound regions between two curves",
+          "Trapezoidal rule",
+          "Reverse chain rule integration"
+        ]
+      },
+      {
+        "num": "4",
+        "name": "Exponential Functions Calculus",
+        "subtopics": [
+          "Differentiation of e^(f(x))",
+          "Applications of exponential differentiation (tangents, rates)",
+          "Integration of e^(kx)",
+          "Applications of exponential integration (areas, rates)",
+          "Calculus with exponential functions to other bases"
+        ]
+      },
+      {
+        "num": "5",
+        "name": "Logarithmic Functions Calculus",
+        "subtopics": [
+          "Differentiation of ln(f(x))",
+          "Applications of log differentiation",
+          "Integration yielding logarithmic functions (integral of 1/x and f prime / f)",
+          "Applications to areas and rates",
+          "Calculus with logarithms to other bases"
+        ]
+      },
+      {
+        "num": "6",
+        "name": "The Trigonometric Functions Calculus",
+        "subtopics": [
+          "Trigonometric graphs and modelling (sine and cosine waves)",
+          "Differentiation of sin(f(x)), cos(f(x)), tan(f(x))",
+          "Applications of trig differentiation",
+          "Integration of sin(kx), cos(kx), sec^2(kx)",
+          "Applications of trig integration to areas and kinematics"
+        ]
+      },
+      {
+        "num": "7",
+        "name": "Motion and Rates",
+        "subtopics": [
+          "Displacement, velocity, acceleration as derivatives and integrals",
+          "Particle motion on a line",
+          "Rates of change and related physical rates",
+          "Differential equations of exponential growth and decay"
+        ]
+      },
+      {
+        "num": "8",
+        "name": "Series and Finance",
+        "subtopics": [
+          "Applications of APs and GPs to financial models",
+          "Simple and compound interest",
+          "Investing money by regular instalments (future value of annuities)",
+          "Paying off loans by instalments (present value)",
+          "Superannuation and pension calculations"
+        ]
+      },
+      {
+        "num": "9",
+        "name": "Discrete Probability Distributions",
+        "subtopics": [
+          "The language of discrete probability distributions",
+          "Discrete random variables and probability mass functions P(X = x)",
+          "Probability distribution tables",
+          "Mean or expected value E(X) = mu = sum(x P(X=x))",
+          "Variance Var(X) = sigma^2 = E(X^2) - (E(X))^2",
+          "Standard deviation of a discrete distribution"
+        ]
+      },
+      {
+        "num": "10",
+        "name": "Continuous Probability Distributions",
+        "subtopics": [
+          "Continuous random variables and probability density functions (PDF)",
+          "Properties of PDFs (integral of f(x) = 1)",
+          "Calculating probabilities as areas under PDF curves",
+          "Mean, variance and standard deviation of continuous distributions",
+          "The standard normal distribution and z-scores",
+          "General normal distribution and empirical rule",
+          "Applications of the normal distribution"
+        ]
+      }
+    ],
+    "inclusions": [
+      "Discrete Probability Distributions (Chapter 16: Discrete random variables, probability mass functions, expected value, variance)",
+      "Continuous Probability Distributions & Normal Distribution (Chapter 17)",
+      "Integration and Calculus of Trig, Exp and Log"
+    ],
+    "exclusions": [
+      "NO 3D Trigonometry (Extension 1 only)",
+      "NO Vectors (Extension 1 & 2 only)",
+      "NO Projectile Motion (Extension 1 only)",
+      "NO Mathematical Induction (Extension 1 only)",
+      "NO Inverse Trigonometric Functions (Extension 1 only)",
+      "NO Differential Equations / Slope Fields (Extension 1 only)"
+    ]
+  },
+  "Year 12 Maths Extension 1": {
+    "year": "Year 12",
+    "subject": "Maths",
+    "level": "Extension 1",
+    "textbook": "CambridgeMATHS Stage 6 NSW Mathematics Extension 1 Year 12 (2nd Edition, 2025/2026)",
+    "chapters": [
+      {
+        "num": "1",
+        "name": "Mathematical Induction",
+        "subtopics": [
+          "Principle of Mathematical Induction",
+          "Induction proofs for series and sums",
+          "Induction proofs for divisibility"
+        ]
+      },
+      {
+        "num": "2",
+        "name": "Vectors",
+        "subtopics": [
+          "Directed line segments and vector definitions in 2D",
+          "Components and column vectors in 2D",
+          "The dot product (scalar product) in 2D",
+          "Coordinates in 3-dimensional space (x, y, z)",
+          "Vectors in three dimensions (xi + yj + zk)",
+          "The dot product in 3-dimensional space",
+          "Vector projections in 2D and 3D"
+        ]
+      },
+      {
+        "num": "3",
+        "name": "Vectors and Motion",
+        "subtopics": [
+          "Displacement and velocity with vectors",
+          "Calculus and acceleration with vectors",
+          "Resultants and relative velocity",
+          "Projectile motion: Time equations of motion",
+          "Projectile motion: Cartesian equation of path and trajectory properties"
+        ]
+      },
+      {
+        "num": "4",
+        "name": "Inverse Trigonometric Functions",
+        "subtopics": [
+          "Defining inverse trigonometric functions (arcsin, arccos, arctan)",
+          "Domains, ranges and properties of inverse trig functions",
+          "Graphs involving inverse trigonometric functions"
+        ]
+      },
+      {
+        "num": "5",
+        "name": "Further Calculus Skills",
+        "subtopics": [
+          "Parametric differentiation",
+          "Differentiating inverse functions",
+          "Differentiating inverse trigonometric functions",
+          "Integration yielding inverse trigonometric functions",
+          "Integration by algebraic substitution",
+          "Further integration by trigonometric substitution",
+          "Further trigonometric integrals"
+        ]
+      },
+      {
+        "num": "6",
+        "name": "Further Applications of Calculus",
+        "subtopics": [
+          "Review of sketching polynomials",
+          "Testing polynomial zeroes for multiplicity",
+          "Related rates of change",
+          "Modified exponential growth and decay models",
+          "Volumes of solids of revolution by slicing"
+        ]
+      },
+      {
+        "num": "7",
+        "name": "Differential Equations",
+        "subtopics": [
+          "First-order differential equations introduction",
+          "Slope fields (direction fields)",
+          "Separable differential equations",
+          "Differential equations of the form dy/dx = f(y)",
+          "Applications of differential equations to population, cooling, and dilution"
+        ]
+      },
+      {
+        "num": "8",
+        "name": "Binomial Distributions and Central Limit Theorem",
+        "subtopics": [
+          "Binomial probability experiments",
+          "Binomial distributions (mean np, variance np(1-p))",
+          "Normal approximation to the binomial distribution",
+          "The Central Limit Theorem"
+        ]
+      }
+    ],
+    "inclusions": [
+      "3D Vectors (3D coordinates, components xi + yj + zk, 3D magnitude, 3D dot product, angles between 3D vectors, parallel/perpendicular in 3D)",
+      "Projectile Motion using vectors",
+      "Slope Fields and First-order differential equations",
+      "Central Limit Theorem and Normal approximation to binomial"
+    ],
+    "exclusions": [
+      "NO VECTOR PROOFS (Geometric proofs using vectors belong exclusively in Extension 2)",
+      "NO t-method / t-formulae (Extension 2 only)",
+      "NO product-to-sum or sum-to-product identities (Extension 2 only)",
+      "NO Pigeonhole Principle (banned across all courses)",
+      "NO Complex Numbers (Extension 2 only)",
+      "NO Mechanics / Resisted motion (Extension 2 only)",
+      "NO Integration by parts (Extension 2 only)",
+      "NO Volumes by cylindrical shells (Extension 2 only)"
+    ]
+  },
+  "Year 12 Maths Extension 2": {
+    "year": "Year 12",
+    "subject": "Maths",
+    "level": "Extension 2",
+    "textbook": "CambridgeMATHS Stage 6 NSW Mathematics Extension 2 Year 12 (2nd Edition, 2025/2026)",
+    "chapters": [
+      {
+        "num": "1",
+        "name": "Complex Numbers I",
+        "subtopics": [
+          "Arithmetic of complex numbers",
+          "Quadratic equations with complex coefficients",
+          "The Argand diagram",
+          "Modulus-argument form (r cis theta)",
+          "Vectors in the complex plane",
+          "Curves and regions in the Argand diagram"
+        ]
+      },
+      {
+        "num": "2",
+        "name": "Proof",
+        "subtopics": [
+          "Logic and the language of proof (implication, equivalence, quantifiers)",
+          "Further logic and language of proof",
+          "Number proofs (divisibility, primes, rational/irrational)",
+          "Proof by contraposition and contradiction",
+          "Algebraic inequalities (AM-GM inequality, Cauchy-Schwarz)",
+          "Further proof by induction",
+          "Inequalities in geometry and calculus"
+        ]
+      },
+      {
+        "num": "3",
+        "name": "Complex Numbers II",
+        "subtopics": [
+          "Polynomials and complex numbers (Fundamental Theorem of Algebra, conjugate root theorem)",
+          "Powers of complex numbers and de Moivres theorem",
+          "Trigonometric identities via de Moivre",
+          "Roots of complex numbers and nth roots of unity"
+        ]
+      },
+      {
+        "num": "4",
+        "name": "Further Work with Vectors",
+        "subtopics": [
+          "Vector equation of a line in 2D and 3D",
+          "Parallel, intersecting and skew lines",
+          "Perpendicular lines in 3D",
+          "Vector equations of circles and spheres",
+          "Other parametric curves",
+          "The algebra of the dot product",
+          "Vector Proofs in 2D (vectors and geometry in two dimensions)",
+          "Vector Proofs in 3D (vectors and geometry in three dimensions)"
+        ]
+      },
+      {
+        "num": "5",
+        "name": "Trigonometric Identities",
+        "subtopics": [
+          "Products to sums and sums to products trigonometric identities",
+          "The t-formulae (t = tan(theta/2)) substitutions and applications"
+        ]
+      },
+      {
+        "num": "6",
+        "name": "Integration",
+        "subtopics": [
+          "Standard integrals review",
+          "Algebraic manipulation in integration",
+          "Integration by substitution",
+          "Partial fractions (linear and quadratic factors)",
+          "Integration by parts",
+          "Trigonometric integrals and reduction formulae",
+          "Miscellaneous harder integrals"
+        ]
+      },
+      {
+        "num": "7",
+        "name": "Mechanics",
+        "subtopics": [
+          "Resolving forces in equilibrium",
+          "Inclined planes and pulleys",
+          "Forces and acceleration (F = ma)",
+          "Simple Harmonic Motion (SHM) with time",
+          "Simple Harmonic Motion (SHM) with displacement",
+          "Horizontal resisted motion",
+          "Vertical resisted motion (terminal velocity)",
+          "Resisted projectile motion"
+        ]
+      }
+    ],
+    "inclusions": [
+      "Vector Proofs in 2D and 3D (Geometric proofs using vectors belong exclusively in Extension 2)",
+      "Trigonometric Identities: Product-to-sum & sum-to-product identities, The t-formulae",
+      "Proof (Contraposition, Contradiction, Inequalities)",
+      "Complex Numbers I and II",
+      "Integration by Parts, Partial Fractions, Reduction Formulae",
+      "Mechanics (Resisted Motion, SHM)"
+    ],
+    "exclusions": [
+      "NO Pigeonhole Principle (strictly banned across all syllabus levels)",
+      "NO Pre-2019 obsolete topics (Conics, Harder Circle Geometry)"
+    ]
+  },
+  "Year 10 Maths": {
+    "year": "Year 10",
+    "subject": "Maths",
+    "level": "N/A",
+    "textbook": "CambridgeMATHS NSW Stage 5.1/5.2/5.3 Year 10 (New Syllabus)",
+    "chapters": [
+      {
+        "num": "1",
+        "name": "Algebra, Equations & Linear Relationships",
+        "subtopics": [
+          "Linear equations and inequalities",
+          "Graphing straight lines and linear equations",
+          "Distance and midpoint formulas",
+          "Parallel and perpendicular lines",
+          "Simultaneous equations (substitution and elimination)",
+          "Regions on Cartesian plane"
+        ]
+      },
+      {
+        "num": "2",
+        "name": "Properties of Geometrical Figures & Circle Geometry",
+        "subtopics": [
+          "Congruent and similar triangles",
+          "Quadrilateral proofs using congruence",
+          "Circle terminology and chord properties",
+          "Angle properties of circles",
+          "Theorems involving tangents, secants and chords"
+        ]
+      },
+      {
+        "num": "3",
+        "name": "Indices, Exponentials & Logarithms",
+        "subtopics": [
+          "Index laws, negative and fractional indices",
+          "Scientific notation",
+          "Exponential equations and graphs",
+          "Exponential growth and decay",
+          "Introducing logarithms and logarithm laws"
+        ]
+      },
+      {
+        "num": "4",
+        "name": "Measurement and Surds",
+        "subtopics": [
+          "Surds arithmetic and rationalising denominator",
+          "Pythagoras theorem in 3D",
+          "Surface area of prisms, cylinders, pyramids, cones and spheres",
+          "Volume of prisms, cylinders, pyramids, cones and spheres"
+        ]
+      },
+      {
+        "num": "5",
+        "name": "Quadratic Expressions and Equations",
+        "subtopics": [
+          "Expanding and factorising algebraic expressions",
+          "Factorising monic and non-monic quadratics",
+          "Completing the square",
+          "Solving quadratic equations by factorising, completing square, and quadratic formula"
+        ]
+      },
+      {
+        "num": "6",
+        "name": "Trigonometry",
+        "subtopics": [
+          "Right-angled trigonometry and unknown angles",
+          "Applications in 2D and 3D",
+          "Bearings and navigation",
+          "Sine rule, Cosine rule and Area of a triangle",
+          "The unit circle and exact values",
+          "Graphs of trigonometric functions"
+        ]
+      },
+      {
+        "num": "7",
+        "name": "Parabolas, Rates of Change & Variation",
+        "subtopics": [
+          "Sketching parabolas using transformations, factorisation, and quadratic formula",
+          "Intersection of lines and parabolas",
+          "Average and instantaneous rates of change",
+          "Direct variation and inverse variation"
+        ]
+      },
+      {
+        "num": "8",
+        "name": "Probability and Statistics",
+        "subtopics": [
+          "Venn diagrams, two-way tables, mutually exclusive events",
+          "Conditional probability",
+          "Tree diagrams and arrays",
+          "Single-variable and bivariate statistics, scatter plots and line of best fit"
+        ]
+      }
+    ]
+  },
+  "Year 9 Maths Advanced": {
+    "year": "Year 9",
+    "subject": "Maths",
+    "level": "Advanced",
+    "textbook": "CambridgeMATHS NSW Stage 5.3 Year 9 Advanced (New Syllabus)",
+    "chapters": [
+      {
+        "num": "1",
+        "name": "Financial Mathematics",
+        "subtopics": [
+          "Simple and compound interest",
+          "Depreciation",
+          "Earning and managing money"
+        ]
+      },
+      {
+        "num": "2",
+        "name": "Algebraic Techniques & Indices",
+        "subtopics": [
+          "Expanding and factorising",
+          "Index laws and fractional indices",
+          "Surds introduction"
+        ]
+      },
+      {
+        "num": "3",
+        "name": "Equations and Formulas",
+        "subtopics": [
+          "Linear equations and inequalities",
+          "Quadratic equations introduction",
+          "Formulas and substitution"
+        ]
+      },
+      {
+        "num": "4",
+        "name": "Linear Relationships",
+        "subtopics": [
+          "Gradient, midpoint, distance",
+          "Graphing lines",
+          "Parallel and perpendicular lines"
+        ]
+      },
+      {
+        "num": "5",
+        "name": "Properties of Geometrical Figures",
+        "subtopics": [
+          "Congruence and similarity proofs",
+          "Angles in polygons and parallel lines"
+        ]
+      },
+      {
+        "num": "6",
+        "name": "Trigonometry",
+        "subtopics": [
+          "Trigonometric ratios",
+          "Angles of elevation and depression",
+          "Bearings"
+        ]
+      },
+      {
+        "num": "7",
+        "name": "Measurement",
+        "subtopics": [
+          "Surface area and volume of prisms and cylinders",
+          "Composite shapes"
+        ]
+      },
+      {
+        "num": "8",
+        "name": "Probability & Single-Variable Data",
+        "subtopics": [
+          "Two-step probability experiments",
+          "Mean, median, mode, IQR, box plots"
+        ]
+      }
+    ]
+  },
+  "Year 7 Maths": {
+    "year": "Year 7",
+    "subject": "Maths",
+    "level": "N/A",
+    "textbook": "CambridgeMATHS NSW Stage 4 Year 7 (New Syllabus)",
+    "chapters": [
+      {
+        "num": "1",
+        "name": "Computation with Integers",
+        "subtopics": [
+          "Whole numbers and operations",
+          "Negative integers arithmetic",
+          "Order of operations"
+        ]
+      },
+      {
+        "num": "2",
+        "name": "Fractions, Decimals and Percentages",
+        "subtopics": [
+          "Equivalent fractions and operations",
+          "Decimals operations",
+          "Percentages and conversions"
+        ]
+      },
+      {
+        "num": "3",
+        "name": "Algebraic Techniques",
+        "subtopics": [
+          "Variables and algebraic expressions",
+          "Like terms",
+          "Expanding brackets"
+        ]
+      },
+      {
+        "num": "4",
+        "name": "Linear Equations",
+        "subtopics": [
+          "Solving one-step and two-step equations",
+          "Using equations to solve problems"
+        ]
+      },
+      {
+        "num": "5",
+        "name": "Lines, Angles and Shapes",
+        "subtopics": [
+          "Angle relationships (complementary, supplementary, vertically opposite)",
+          "Parallel lines and transversals",
+          "Triangles and quadrilaterals classification",
+          "Angle sums"
+        ]
+      },
+      {
+        "num": "6",
+        "name": "Measurement",
+        "subtopics": [
+          "Perimeter and area of rectangles, triangles, parallelograms",
+          "Circumference and area of circles",
+          "Volume of rectangular and triangular prisms",
+          "Time and time zones"
+        ]
+      },
+      {
+        "num": "7",
+        "name": "Probability and Data",
+        "subtopics": [
+          "Collecting and classifying data",
+          "Dot plots, column graphs, stem-and-leaf plots",
+          "Theoretical and experimental probability"
+        ]
+      }
+    ]
+  }
+}

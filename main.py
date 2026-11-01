@@ -449,6 +449,18 @@ def load_style_samples(year: str, subject: str, difficulty: str, topic: str) -> 
     return "\n\n---\n\n".join(samples), source_msg
 
 
+@st.cache_data
+def load_syllabus_manifest() -> dict:
+    manifest_path = os.path.join(os.path.dirname(__file__), "syllabus_manifest.json")
+    if os.path.exists(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            _log_error("load_syllabus_manifest", e)
+    return {}
+
+
 # ── SAFE MATH EXPRESSION EVALUATOR ─────────────────────────────────────────────
 # Evaluates AI-generated graph expressions (e.g. "sin(x) + 2") WITHOUT calling
 # Python's raw eval() on untrusted text. This walks the parsed AST and only
@@ -2162,6 +2174,19 @@ for y in year_group:
     p_path = get_parent_path(y, subject, actual_level)
     available_topics.extend(get_available_topics(p_path))
 
+# Seamless fallback to textbook syllabus manifest if folder topics are empty
+if not available_topics:
+    manifest_data = load_syllabus_manifest()
+    for y in year_group:
+        candidate_keys = [
+            f"{y} {subject} {actual_level}".strip(),
+            f"{y} {subject}".strip()
+        ]
+        for ck in candidate_keys:
+            if ck in manifest_data:
+                available_topics.extend([f"{c['num']}. {c['name']}" for c in manifest_data[ck].get("chapters", [])])
+                break
+
 available_topics = sorted(list(set(available_topics)), key=lambda x: [int(c) if c.isdigit() else c for c in re.split(r"(\d+)", x)])
 
 c4, c5, c6 = st.columns([3, 2, 1])
@@ -2437,6 +2462,35 @@ if generate_btn:
             syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {actual_level} syllabus.{universal_ban}{level_ban}{yr_ban}"
         else:
             syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {subject} syllabus. Ensure all diagrams, notations, reaction rates, equilibrium graphs, and scientific concepts follow official NSW HSC curriculum standards."
+
+        # Grounding directly in official Cambridge New Syllabus textbook manifest
+        manifest_data = load_syllabus_manifest()
+        matched_course = None
+        for y in year_group:
+            candidate_keys = [
+                f"{y} {subject} {actual_level}".strip(),
+                f"{y} {subject}".strip()
+            ]
+            for ck in candidate_keys:
+                if ck in manifest_data:
+                    matched_course = manifest_data[ck]
+                    break
+            if matched_course:
+                break
+
+        if matched_course:
+            textbook_ref = matched_course.get("textbook", "")
+            ch_list = [f"- Chapter {c['num']}: {c['name']} (Subtopics: {', '.join(c.get('subtopics', []))})" for c in matched_course.get("chapters", [])]
+            inclusions = matched_course.get("inclusions", [])
+            exclusions = matched_course.get("exclusions", [])
+            
+            manifest_context = f"\n\nOFFICIAL SYLLABUS TEXTBOOK BENCHMARK ({textbook_ref}):\n"
+            manifest_context += "The following are the authoritative chapters and granular subtopics for this course:\n" + "\n".join(ch_list) + "\n"
+            if inclusions:
+                manifest_context += "\nMANDATORY INCLUSIONS:\n" + "\n".join([f"• {inc}" for inc in inclusions]) + "\n"
+            if exclusions:
+                manifest_context += "\nSTRICT EXCLUSIONS & BANS:\n" + "\n".join([f"• {exc}" for exc in exclusions]) + "\n"
+            syllabus_ban += manifest_context
 
         prompt = f"""You are a NESA Examiner.
 Generate an examination on "{exam_focus}" for {grades_string}{level_text} in {subject}.
