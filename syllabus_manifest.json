@@ -891,34 +891,39 @@
         "num": "1",
         "name": "Algebra, Equations & Linear Relationships",
         "subtopics": [
-          "Linear equations and inequalities",
-          "Graphing straight lines and linear equations",
+          "Review of algebra and linear equations",
+          "Linear inequalities",
           "Distance and midpoint formulas",
           "Parallel and perpendicular lines",
-          "Simultaneous equations (substitution and elimination)",
-          "Regions on Cartesian plane"
+          "Linear simultaneous equations (substitution and elimination)",
+          "Applications of simultaneous equations (break-even)",
+          "Linear regions and inequalities on the Cartesian plane"
         ]
       },
       {
         "num": "2",
         "name": "Properties of Geometrical Figures & Circle Geometry",
         "subtopics": [
-          "Congruent and similar triangles",
+          "Congruent and similar triangle proofs",
           "Quadrilateral proofs using congruence",
-          "Circle terminology and chord properties",
-          "Angle properties of circles",
-          "Theorems involving tangents, secants and chords"
+          "Circle terminology and chord properties (chords equidistant from centre, perpendicular bisector)",
+          "Angle properties of circles (angle at centre = 2x angle at circumference, angles in same segment, angle in semicircle)",
+          "Cyclic quadrilaterals (opposite angles supplementary, exterior angle)",
+          "Theorems involving tangents, secants and intersecting chords"
         ]
       },
       {
         "num": "3",
         "name": "Indices, Exponentials & Logarithms",
         "subtopics": [
-          "Index laws, negative and fractional indices",
-          "Scientific notation",
-          "Exponential equations and graphs",
-          "Exponential growth and decay",
-          "Introducing logarithms and logarithm laws"
+          "Index laws review, negative and fractional indices",
+          "Scientific notation with significant figures",
+          "Exponential equations",
+          "Exponential functions and their graphs (y = a^x)",
+          "Exponential growth and decay models",
+          "Introducing logarithms (log_a x = y <=> a^y = x)",
+          "Laws of logarithms (product, quotient, power)",
+          "Solving exponential equations using logarithms"
         ]
       },
       {
@@ -928,51 +933,99 @@
           "Surds arithmetic and rationalising denominator",
           "Pythagoras theorem in 3D",
           "Surface area of prisms, cylinders, pyramids, cones and spheres",
-          "Volume of prisms, cylinders, pyramids, cones and spheres"
+          "Volume of prisms, cylinders, pyramids, cones and spheres",
+          "Composite solids and accuracy of measuring instruments"
         ]
       },
       {
         "num": "5",
         "name": "Quadratic Expressions and Equations",
         "subtopics": [
-          "Expanding and factorising algebraic expressions",
+          "Expanding expressions and algebraic fractions review",
           "Factorising monic and non-monic quadratics",
-          "Completing the square",
-          "Solving quadratic equations by factorising, completing square, and quadratic formula"
+          "Factorising by completing the square",
+          "Solving quadratic equations by factorising",
+          "Solving quadratic equations by completing the square",
+          "Solving quadratic equations using the quadratic formula",
+          "Applications of quadratic equations"
         ]
       },
       {
         "num": "6",
         "name": "Trigonometry",
         "subtopics": [
-          "Right-angled trigonometry and unknown angles",
-          "Applications in 2D and 3D",
-          "Bearings and navigation",
-          "Sine rule, Cosine rule and Area of a triangle",
-          "The unit circle and exact values",
-          "Graphs of trigonometric functions"
+          "Right-angled trigonometry and bearings review",
+          "Applications in three dimensions",
+          "The Sine Rule for sides and angles",
+          "The Cosine Rule for sides and angles",
+          "Area of a triangle formula A = 1/2 a b sin C",
+          "The unit circle and exact trigonometric values (30, 45, 60, 90, 180, 270, 360)",
+          "Graphs of y = sin x and y = cos x",
+          "Solving trigonometric equations"
         ]
       },
       {
         "num": "7",
         "name": "Parabolas, Rates of Change & Variation",
         "subtopics": [
-          "Sketching parabolas using transformations, factorisation, and quadratic formula",
+          "Sketching parabolas using transformations and vertex form y = a(x-h)^2 + k",
+          "Sketching parabolas using factorisation and quadratic formula",
           "Intersection of lines and parabolas",
-          "Average and instantaneous rates of change",
+          "Rates of change (average and instantaneous)",
           "Direct variation and inverse variation"
         ]
       },
       {
         "num": "8",
-        "name": "Probability and Statistics",
+        "name": "Probability",
         "subtopics": [
-          "Venn diagrams, two-way tables, mutually exclusive events",
-          "Conditional probability",
-          "Tree diagrams and arrays",
-          "Single-variable and bivariate statistics, scatter plots and line of best fit"
+          "Venn diagrams, two-way tables, mutually exclusive vs non-mutually exclusive",
+          "Conditional probability and notation P(A|B)",
+          "Tree diagrams and arrays with and without replacement",
+          "Independent and dependent events"
+        ]
+      },
+      {
+        "num": "9",
+        "name": "Single Variable & Bivariate Statistics",
+        "subtopics": [
+          "Summary statistics (mean, median, mode, IQR)",
+          "Box plots and parallel box plots",
+          "Standard deviation (population and sample)",
+          "Time-series data and trends",
+          "Bivariate data and scatter plots",
+          "Line of best fit by eye and least-squares regression with technology"
+        ]
+      },
+      {
+        "num": "10",
+        "name": "Functions, Polynomials & Other Graphs",
+        "subtopics": [
+          "Functions and function notation f(x)",
+          "Introducing polynomials (degree, leading coefficient)",
+          "Polynomial long division",
+          "Remainder theorem and factor theorem",
+          "Factorising polynomials to find zeroes",
+          "Graphing cubic functions and general polynomials",
+          "Graphs of circles x^2 + y^2 = r^2",
+          "Hyperbolic functions y = k/x and transformations",
+          "Further transformations of graphs"
         ]
       }
+    ],
+    "inclusions": [
+      "Circle Geometry Proofs (chords, cyclic quads, tangents, alternate segment)",
+      "Logarithms and Logarithm Laws",
+      "Non-right angled trigonometry (Sine rule, Cosine rule, Triangle area, Unit circle)",
+      "Quadratic formula and completing the square",
+      "Polynomial long division, remainder and factor theorems",
+      "Standard deviation and regression line"
+    ],
+    "exclusions": [
+      "NO Calculus / Derivatives (Year 11 Advanced)",
+      "NO 3D Vectors or Vectors (Year 11/12 Extension)",
+      "NO Radians (Year 11 Advanced)",
+      "NO Compound or Double-angle trigonometry (Year 11 Extension)"
     ]
   },
   "Year 9 Maths Advanced": {
@@ -983,73 +1036,145 @@
     "chapters": [
       {
         "num": "1",
-        "name": "Financial Mathematics",
+        "name": "Computation, Financial Maths & Percentages",
         "subtopics": [
-          "Simple and compound interest",
-          "Depreciation",
-          "Earning and managing money"
+          "Computations with integers and rational numbers",
+          "Decimal places and significant figures",
+          "Ratios, rates and best buys",
+          "Percentages, profit, loss, discounts",
+          "PAYG income tax system and deductions",
+          "Simple interest",
+          "Compound interest and depreciation",
+          "Compound interest formula A = P(1+r)^n"
         ]
       },
       {
         "num": "2",
-        "name": "Algebraic Techniques & Indices",
+        "name": "Expressions, Equations & Inequalities",
         "subtopics": [
-          "Expanding and factorising",
-          "Index laws and fractional indices",
-          "Surds introduction"
+          "Algebraic techniques and expanding expressions",
+          "Linear equations with brackets, fractions and pronumerals on both sides",
+          "Linear inequalities and graphing on number line",
+          "Using formulas",
+          "Linear simultaneous equations by substitution",
+          "Linear simultaneous equations by elimination",
+          "Solving word problems with simultaneous equations",
+          "Quadratic equations of the form ax^2 = c"
         ]
       },
       {
         "num": "3",
-        "name": "Equations and Formulas",
+        "name": "Pythagoras Theorem & Trigonometry",
         "subtopics": [
-          "Linear equations and inequalities",
-          "Quadratic equations introduction",
-          "Formulas and substitution"
+          "Pythagoras theorem in 2D and 3D shapes",
+          "Trigonometric ratios (sin, cos, tan)",
+          "Finding unknown sides and angles",
+          "Solving for denominator sides",
+          "Applications of trigonometry and angles of elevation/depression",
+          "Bearings (three-figure bearings and compass bearings)"
         ]
       },
       {
         "num": "4",
         "name": "Linear Relationships",
         "subtopics": [
-          "Gradient, midpoint, distance",
-          "Graphing lines",
-          "Parallel and perpendicular lines"
+          "Graphing lines using intercepts",
+          "Gradient and direct proportion",
+          "Gradient-intercept form (y = mx + c)",
+          "Point-gradient form y - y1 = m(x - x1)",
+          "Midpoint and length/distance formulas",
+          "Parallel lines (m1 = m2) and perpendicular lines (m1 * m2 = -1)",
+          "Linear modelling",
+          "Graphical solution of simultaneous equations"
         ]
       },
       {
         "num": "5",
-        "name": "Properties of Geometrical Figures",
+        "name": "Measurement (Surface Area & Volume)",
         "subtopics": [
-          "Congruence and similarity proofs",
-          "Angles in polygons and parallel lines"
+          "Perimeter and circle circumference",
+          "Area of composite shapes",
+          "Surface area of prisms and pyramids",
+          "Surface area of cylinders",
+          "Volume of prisms, pyramids, cylinders"
         ]
       },
       {
         "num": "6",
-        "name": "Trigonometry",
+        "name": "Indices & Surds",
         "subtopics": [
-          "Trigonometric ratios",
-          "Angles of elevation and depression",
-          "Bearings"
+          "Index laws extended",
+          "Negative indices",
+          "Scientific notation",
+          "Fractional indices and relationship to surds",
+          "Irrational numbers and surds arithmetic",
+          "Simplifying surds",
+          "Multiplying, dividing, adding, subtracting surds"
         ]
       },
       {
         "num": "7",
-        "name": "Measurement",
+        "name": "Properties of Geometrical Figures & Congruence",
         "subtopics": [
-          "Surface area and volume of prisms and cylinders",
-          "Composite shapes"
+          "Angle proofs on parallel lines and polygons",
+          "Congruent triangles (SSS, SAS, AAS, RHS)",
+          "Using congruence in formal geometric proofs",
+          "Similar figures and similar triangles proofs",
+          "Scale factor and areas/volumes of similar figures"
         ]
       },
       {
         "num": "8",
-        "name": "Probability & Single-Variable Data",
+        "name": "Quadratic Expressions & Algebraic Fractions",
         "subtopics": [
-          "Two-step probability experiments",
-          "Mean, median, mode, IQR, box plots"
+          "Expanding binomial products and special products",
+          "Factorising by HCF, difference of two squares, grouping in pairs",
+          "Factorising monic quadratic trinomials x^2 + bx + c",
+          "Factorising non-monic quadratic trinomials ax^2 + bx + c",
+          "Simplifying, multiplying, dividing, adding, subtracting algebraic fractions",
+          "Equations involving algebraic fractions"
+        ]
+      },
+      {
+        "num": "9",
+        "name": "Probability, Data & Box Plots",
+        "subtopics": [
+          "Probability review, Venn diagrams, two-way tables",
+          "Set notation (union, intersection, complement)",
+          "Tree diagrams and arrays",
+          "Data and sampling techniques",
+          "Mean, median, mode and grouped frequency tables",
+          "Measures of spread: range and interquartile range (IQR)",
+          "Five-number summary and box plots"
+        ]
+      },
+      {
+        "num": "10",
+        "name": "Quadratic Equations & Parabolas",
+        "subtopics": [
+          "Solving quadratic equations ax^2 + bx = 0 and x^2 - d^2 = 0",
+          "Solving monic quadratics x^2 + bx + c = 0 by factorising",
+          "Word problems leading to quadratic equations",
+          "The parabola y = ax^2 and features (vertex, axis of symmetry)",
+          "Sketching vertical and horizontal translations y = ax^2 + c and y = a(x-h)^2",
+          "Sketching parabolas using x-intercepts y = a(x-p)(x-q)"
         ]
       }
+    ],
+    "inclusions": [
+      "Surds arithmetic (simplifying, adding, multiplying)",
+      "Simultaneous equations (substitution, elimination, graphical)",
+      "3D Pythagoras and Bearings",
+      "Parallel and perpendicular lines (m1 * m2 = -1)",
+      "Factorising monic and non-monic quadratics",
+      "Parabolas introduction and sketching",
+      "Box plots and IQR"
+    ],
+    "exclusions": [
+      "NO Logarithms (Year 10 5.3)",
+      "NO Non-right angled trig / Sine and Cosine rules (Year 10 5.3)",
+      "NO Circle geometry proofs (Year 10 5.3)",
+      "NO Polynomial division or remainder theorem (Year 10 5.3 / Year 11 Ext 1)"
     ]
   },
   "Year 7 Maths": {
@@ -1060,68 +1185,568 @@
     "chapters": [
       {
         "num": "1",
-        "name": "Computation with Integers",
+        "name": "Positive Integers & Calculation",
         "subtopics": [
-          "Whole numbers and operations",
-          "Negative integers arithmetic",
-          "Order of operations"
+          "Place value in ancient and Hindu-Arabic numbers",
+          "Adding and subtracting positive integers",
+          "Algorithms for addition and subtraction",
+          "Multiplying small and large positive integers",
+          "Dividing positive integers and dealing with remainders",
+          "Estimating and rounding positive integers",
+          "Order of operations (BODMAS) with positive integers"
         ]
       },
       {
         "num": "2",
-        "name": "Fractions, Decimals and Percentages",
+        "name": "Factors, Primes, Indices & Patterns",
         "subtopics": [
-          "Equivalent fractions and operations",
-          "Decimals operations",
-          "Percentages and conversions"
+          "Factors and multiples",
+          "Highest Common Factor (HCF) and Lowest Common Multiple (LCM)",
+          "Divisibility tests",
+          "Prime numbers and prime decomposition",
+          "Index notation and powers",
+          "Squares and square roots",
+          "Number and spatial patterns",
+          "Tables, rules and the Cartesian plane"
         ]
       },
       {
         "num": "3",
-        "name": "Algebraic Techniques",
+        "name": "Fractions, Percentages & Ratios",
         "subtopics": [
-          "Variables and algebraic expressions",
-          "Like terms",
-          "Expanding brackets"
+          "Concept of fractions, equivalent and simplified fractions",
+          "Mixed numerals and improper fractions",
+          "Ordering, adding and subtracting fractions",
+          "Multiplying and dividing fractions",
+          "Fractions and percentages",
+          "Percentage of a quantity",
+          "Introduction to ratios and solving ratio problems"
         ]
       },
       {
         "num": "4",
-        "name": "Linear Equations",
+        "name": "Algebraic Techniques",
         "subtopics": [
-          "Solving one-step and two-step equations",
-          "Using equations to solve problems"
+          "Introduction to formal algebra and variables",
+          "Substituting positive integers into algebraic expressions",
+          "Equivalent algebraic expressions",
+          "Collecting like terms",
+          "Multiplying, dividing and mixed operations in algebra",
+          "Expanding brackets with distributive law",
+          "Applying algebra to word problems"
         ]
       },
       {
         "num": "5",
-        "name": "Lines, Angles and Shapes",
+        "name": "Decimals",
         "subtopics": [
-          "Angle relationships (complementary, supplementary, vertically opposite)",
-          "Parallel lines and transversals",
-          "Triangles and quadrilaterals classification",
-          "Angle sums"
+          "Place value in decimals and ordering",
+          "Rounding decimals",
+          "Addition and subtraction of decimals",
+          "Multiplying and dividing decimals by powers of 10",
+          "Multiplying by a decimal",
+          "Dividing decimals",
+          "Connecting decimals, fractions and percentages",
+          "Expressing proportions"
         ]
       },
       {
         "num": "6",
-        "name": "Measurement",
+        "name": "Negative Integers & Coordinate Plane",
         "subtopics": [
-          "Perimeter and area of rectangles, triangles, parallelograms",
-          "Circumference and area of circles",
-          "Volume of rectangular and triangular prisms",
-          "Time and time zones"
+          "Concept of negative integers and number line",
+          "Adding and subtracting positive and negative integers",
+          "Multiplying and dividing by an integer",
+          "Order of operations with directed numbers",
+          "Substitution involving negative numbers",
+          "The four-quadrant Cartesian plane and plotting points"
         ]
       },
       {
         "num": "7",
-        "name": "Probability and Data",
+        "name": "Lines, Shapes & Angles",
         "subtopics": [
-          "Collecting and classifying data",
-          "Dot plots, column graphs, stem-and-leaf plots",
-          "Theoretical and experimental probability"
+          "Points, lines, rays, intervals and angles",
+          "Adjacent and vertically opposite angles",
+          "Transversal lines and parallel lines (alternate, corresponding, co-interior)",
+          "Classifying and constructing triangles",
+          "Classifying quadrilaterals and polygons",
+          "Angle sum of a triangle and quadrilateral",
+          "Line symmetry, rotational symmetry, reflections and rotations",
+          "Drawing solids and nets"
+        ]
+      },
+      {
+        "num": "8",
+        "name": "Data & Probability",
+        "subtopics": [
+          "Collecting and classifying data (categorical vs numerical)",
+          "Summarising data numerically (mean, median, mode, range)",
+          "Column graphs and dot plots",
+          "Line graphs and divided bar graphs",
+          "Stem-and-leaf plots",
+          "Describing probability using language and fractions",
+          "Theoretical and experimental probability in single-step experiments"
+        ]
+      },
+      {
+        "num": "9",
+        "name": "Linear Equations & Formulas",
+        "subtopics": [
+          "Introduction to equations and solving by inspection",
+          "Equivalent equations and balance model",
+          "Solving one-step and two-step equations systematically",
+          "Equations with fractions",
+          "Equations with brackets",
+          "Using formulas and substitution",
+          "Using equations to solve word problems"
+        ]
+      },
+      {
+        "num": "10",
+        "name": "Length, Perimeter, Area & Volume",
+        "subtopics": [
+          "Metric units of length and conversions",
+          "Perimeter of polygons and composite shapes",
+          "Circumference of circles and perimeter of sectors",
+          "Units of area and area of rectangles, triangles, parallelograms",
+          "Area of composite shapes",
+          "Volume and capacity of rectangular and triangular prisms",
+          "Mass and temperature"
+        ]
+      },
+      {
+        "num": "11",
+        "name": "Time & Time Zones",
+        "subtopics": [
+          "Units of time and conversions",
+          "12-hour and 24-hour time",
+          "Working with timetables",
+          "Using Australian and international time zones"
         ]
       }
+    ],
+    "exclusions": [
+      "NO Algebra fractions with pronumerals in denominators",
+      "NO Negative indices or fractional indices",
+      "NO Quadratic equations or parabolas",
+      "NO Pythagoras theorem (Stage 4 Year 8)",
+      "NO Trigonometric ratios (Stage 5 Year 9)"
+    ]
+  },
+  "Year 8 Maths": {
+    "year": "Year 8",
+    "subject": "Maths",
+    "level": "N/A",
+    "textbook": "CambridgeMATHS NSW Stage 4 Year 8 (New Syllabus)",
+    "chapters": [
+      {
+        "num": "1",
+        "name": "Algebraic Techniques & Indices",
+        "subtopics": [
+          "The language of algebra and conventions",
+          "Substitution and equivalence",
+          "Adding and subtracting terms",
+          "Multiplying and dividing terms",
+          "Adding, subtracting, multiplying algebraic fractions",
+          "Expanding brackets and binomial products",
+          "Factorising algebraic expressions (HCF)",
+          "Index laws for multiplication and division",
+          "The zero index and power of a power"
+        ]
+      },
+      {
+        "num": "2",
+        "name": "Equations",
+        "subtopics": [
+          "Solving two-step and three-step equations",
+          "Equations with pronumerals on both sides",
+          "Equations with brackets and grouping symbols",
+          "Equations involving algebraic fractions",
+          "Formulas and changing the subject",
+          "Solving worded problems using equations",
+          "Linear inequalities on the number line"
+        ]
+      },
+      {
+        "num": "3",
+        "name": "Measurement & Pythagoras Theorem",
+        "subtopics": [
+          "Units of measurement and conversions",
+          "Perimeter and circumference",
+          "Area of triangles, quadrilaterals, circles, sectors",
+          "Area of composite shapes",
+          "Surface area of prisms and cylinders",
+          "Volume of right prisms and cylinders",
+          "Capacity and mass",
+          "Introducing Pythagoras theorem",
+          "Finding the hypotenuse and shorter sides",
+          "Applications of Pythagoras theorem in 2D"
+        ]
+      },
+      {
+        "num": "4",
+        "name": "Fractions, Decimals, Percentages & Financial Maths",
+        "subtopics": [
+          "Review of fraction and decimal arithmetic",
+          "Percentage calculations and percentage increase/decrease",
+          "Discounts, markups and profit/loss",
+          "Percentage change",
+          "Simple interest (I = Prn)",
+          "Best buys and consumer financial calculations"
+        ]
+      },
+      {
+        "num": "5",
+        "name": "Ratios and Rates",
+        "subtopics": [
+          "Introducing and simplifying ratios",
+          "Dividing a quantity in a given ratio",
+          "Scale drawings and maps",
+          "Introducing rates and unit rates",
+          "Speed, distance and time calculations",
+          "Converting rates"
+        ]
+      },
+      {
+        "num": "6",
+        "name": "Angle Relationships & Geometrical Figures",
+        "subtopics": [
+          "Complementary, supplementary, vertically opposite angles",
+          "Angles at a point",
+          "Angles on parallel lines (alternate, corresponding, co-interior)",
+          "Angle sum of triangles and exterior angle theorem",
+          "Angle sum of quadrilaterals and polygons",
+          "Properties of special quadrilaterals"
+        ]
+      },
+      {
+        "num": "7",
+        "name": "Linear Relationships",
+        "subtopics": [
+          "Plotting points on the Cartesian plane",
+          "Graphing straight lines from a table of values",
+          "Gradient of a line (rise over run)",
+          "The gradient-intercept form (y = mx + c)",
+          "Finding the equation of a straight line",
+          "Linear models and real-life graphs"
+        ]
+      },
+      {
+        "num": "8",
+        "name": "Transformations & Congruence",
+        "subtopics": [
+          "Translations, reflections and rotations",
+          "Congruent figures and properties",
+          "Congruent triangle test: SSS",
+          "Congruent triangle test: SAS",
+          "Congruent triangle test: AAS",
+          "Congruent triangle test: RHS",
+          "Using congruent triangles to prove geometric properties"
+        ]
+      },
+      {
+        "num": "9",
+        "name": "Data Collection, Representation & Analysis",
+        "subtopics": [
+          "Collecting data and census vs sample",
+          "Frequency distribution tables",
+          "Histograms and frequency polygons",
+          "Stem-and-leaf plots",
+          "Measures of centre: mean, median, mode",
+          "Measures of spread: range",
+          "Investigating outliers and effect on mean/median",
+          "Describing probability and two-way tables"
+        ]
+      }
+    ],
+    "exclusions": [
+      "NO Trigonometric ratios (Stage 5 Year 9)",
+      "NO Quadratic equations, quadratic formula or parabolas",
+      "NO Logarithms or Surds arithmetic",
+      "NO Simultaneous equations (Year 9/10)"
+    ]
+  },
+  "Year 9 Maths Standard": {
+    "year": "Year 9",
+    "subject": "Maths",
+    "level": "Standard",
+    "textbook": "CambridgeMATHS NSW Stage 5.1/5.2 Year 9 Standard (New Syllabus)",
+    "chapters": [
+      {
+        "num": "1",
+        "name": "Integers, Decimals, Fractions, Ratios & Rates",
+        "subtopics": [
+          "Adding, subtracting, multiplying, dividing directed numbers",
+          "Significant figures and rounding",
+          "Rational and irrational numbers",
+          "Fractions operations review",
+          "Simplifying and dividing in a ratio",
+          "Rates and unit conversions"
+        ]
+      },
+      {
+        "num": "2",
+        "name": "Financial Mathematics",
+        "subtopics": [
+          "Percentages, fractions and decimals review",
+          "Percentage increase and decrease",
+          "Profits and discounts",
+          "Earning income (wages, salaries, overtime)",
+          "Taxation and PAYG system",
+          "Simple interest formulas and applications"
+        ]
+      },
+      {
+        "num": "3",
+        "name": "Expressions & Equations",
+        "subtopics": [
+          "Algebraic expressions review",
+          "Expanding single brackets and multiplying/dividing expressions",
+          "Linear equations with pronumerals on one and both sides",
+          "Linear equations involving brackets and fractions",
+          "Using equations to solve word problems",
+          "Using formulas and substitution"
+        ]
+      },
+      {
+        "num": "4",
+        "name": "Right-Angled Triangles (Pythagoras & Trigonometry)",
+        "subtopics": [
+          "Pythagoras theorem in 2D applications",
+          "Introducing trigonometric ratios (sin, cos, tan)",
+          "Finding unknown sides in right-angled triangles",
+          "Solving for denominator side lengths",
+          "Finding unknown angles using inverse trig (sin^-1, cos^-1, tan^-1)",
+          "Using trigonometry to solve real-world problems"
+        ]
+      },
+      {
+        "num": "5",
+        "name": "Linear Relationships",
+        "subtopics": [
+          "Points and lines on the Cartesian plane",
+          "x-intercept and y-intercept",
+          "Graphing straight lines using intercepts",
+          "Gradient from rise and run",
+          "Gradient-intercept form (y = mx + c)",
+          "Finding line equations",
+          "Linear modeling in practical contexts"
+        ]
+      },
+      {
+        "num": "6",
+        "name": "Length, Area, Surface Area & Volume",
+        "subtopics": [
+          "Perimeter and circumference",
+          "Area of triangles, quadrilaterals, circles, sectors",
+          "Perimeter and area of composite shapes",
+          "Surface area of prisms and cylinders",
+          "Volume of prisms and cylinders"
+        ]
+      },
+      {
+        "num": "7",
+        "name": "Indices",
+        "subtopics": [
+          "Index notation",
+          "Index laws for multiplication and division",
+          "Zero index and power of a power",
+          "Index laws extended",
+          "Negative indices",
+          "Scientific notation with significant figures"
+        ]
+      },
+      {
+        "num": "8",
+        "name": "Properties of Geometrical Figures",
+        "subtopics": [
+          "Angle sum of triangles, quadrilaterals, polygons",
+          "Parallel lines properties",
+          "Enlargement and similar figures",
+          "Scale factor and similar triangles"
+        ]
+      },
+      {
+        "num": "9",
+        "name": "Quadratic Expressions & Algebraic Fractions",
+        "subtopics": [
+          "Review of algebra",
+          "Expanding binomial products (x+a)(x+b)",
+          "Expanding perfect squares (x+a)^2 and difference of two squares (x+a)(x-a)",
+          "Factorising by HCF",
+          "Simplifying algebraic fractions: multiplication, division, addition, subtraction"
+        ]
+      },
+      {
+        "num": "10",
+        "name": "Probability & Data Analysis",
+        "subtopics": [
+          "Probability review and sample spaces",
+          "Venn diagrams and two-way tables",
+          "Arrays for two-step experiments",
+          "Tree diagrams with and without replacement",
+          "Relative frequency and simulations",
+          "Mean, median, mode, range",
+          "Stem-and-leaf plots",
+          "Grouping data into frequency classes"
+        ]
+      }
+    ],
+    "exclusions": [
+      "NO Surds arithmetic or rationalising denominator (Path 5.3)",
+      "NO Logarithms (Year 10 5.3)",
+      "NO Non-right angled trigonometry / Sine & Cosine rules (Year 10 5.3)",
+      "NO Parabolas sketching or quadratic formula (Year 9 Adv / Year 10)"
+    ]
+  },
+  "Year 9 Maths": {
+    "year": "Year 9",
+    "subject": "Maths",
+    "level": "Advanced",
+    "textbook": "CambridgeMATHS NSW Stage 5.3 Year 9 Advanced (New Syllabus)",
+    "chapters": [
+      {
+        "num": "1",
+        "name": "Computation, Financial Maths & Percentages",
+        "subtopics": [
+          "Computations with integers and rational numbers",
+          "Decimal places and significant figures",
+          "Ratios, rates and best buys",
+          "Percentages, profit, loss, discounts",
+          "PAYG income tax system and deductions",
+          "Simple interest",
+          "Compound interest and depreciation",
+          "Compound interest formula A = P(1+r)^n"
+        ]
+      },
+      {
+        "num": "2",
+        "name": "Expressions, Equations & Inequalities",
+        "subtopics": [
+          "Algebraic techniques and expanding expressions",
+          "Linear equations with brackets, fractions and pronumerals on both sides",
+          "Linear inequalities and graphing on number line",
+          "Using formulas",
+          "Linear simultaneous equations by substitution",
+          "Linear simultaneous equations by elimination",
+          "Solving word problems with simultaneous equations",
+          "Quadratic equations of the form ax^2 = c"
+        ]
+      },
+      {
+        "num": "3",
+        "name": "Pythagoras Theorem & Trigonometry",
+        "subtopics": [
+          "Pythagoras theorem in 2D and 3D shapes",
+          "Trigonometric ratios (sin, cos, tan)",
+          "Finding unknown sides and angles",
+          "Solving for denominator sides",
+          "Applications of trigonometry and angles of elevation/depression",
+          "Bearings (three-figure bearings and compass bearings)"
+        ]
+      },
+      {
+        "num": "4",
+        "name": "Linear Relationships",
+        "subtopics": [
+          "Graphing lines using intercepts",
+          "Gradient and direct proportion",
+          "Gradient-intercept form (y = mx + c)",
+          "Point-gradient form y - y1 = m(x - x1)",
+          "Midpoint and length/distance formulas",
+          "Parallel lines (m1 = m2) and perpendicular lines (m1 * m2 = -1)",
+          "Linear modelling",
+          "Graphical solution of simultaneous equations"
+        ]
+      },
+      {
+        "num": "5",
+        "name": "Measurement (Surface Area & Volume)",
+        "subtopics": [
+          "Perimeter and circle circumference",
+          "Area of composite shapes",
+          "Surface area of prisms and pyramids",
+          "Surface area of cylinders",
+          "Volume of prisms, pyramids, cylinders"
+        ]
+      },
+      {
+        "num": "6",
+        "name": "Indices & Surds",
+        "subtopics": [
+          "Index laws extended",
+          "Negative indices",
+          "Scientific notation",
+          "Fractional indices and relationship to surds",
+          "Irrational numbers and surds arithmetic",
+          "Simplifying surds",
+          "Multiplying, dividing, adding, subtracting surds"
+        ]
+      },
+      {
+        "num": "7",
+        "name": "Properties of Geometrical Figures & Congruence",
+        "subtopics": [
+          "Angle proofs on parallel lines and polygons",
+          "Congruent triangles (SSS, SAS, AAS, RHS)",
+          "Using congruence in formal geometric proofs",
+          "Similar figures and similar triangles proofs",
+          "Scale factor and areas/volumes of similar figures"
+        ]
+      },
+      {
+        "num": "8",
+        "name": "Quadratic Expressions & Algebraic Fractions",
+        "subtopics": [
+          "Expanding binomial products and special products",
+          "Factorising by HCF, difference of two squares, grouping in pairs",
+          "Factorising monic quadratic trinomials x^2 + bx + c",
+          "Factorising non-monic quadratic trinomials ax^2 + bx + c",
+          "Simplifying, multiplying, dividing, adding, subtracting algebraic fractions",
+          "Equations involving algebraic fractions"
+        ]
+      },
+      {
+        "num": "9",
+        "name": "Probability, Data & Box Plots",
+        "subtopics": [
+          "Probability review, Venn diagrams, two-way tables",
+          "Set notation (union, intersection, complement)",
+          "Tree diagrams and arrays",
+          "Data and sampling techniques",
+          "Mean, median, mode and grouped frequency tables",
+          "Measures of spread: range and interquartile range (IQR)",
+          "Five-number summary and box plots"
+        ]
+      },
+      {
+        "num": "10",
+        "name": "Quadratic Equations & Parabolas",
+        "subtopics": [
+          "Solving quadratic equations ax^2 + bx = 0 and x^2 - d^2 = 0",
+          "Solving monic quadratics x^2 + bx + c = 0 by factorising",
+          "Word problems leading to quadratic equations",
+          "The parabola y = ax^2 and features (vertex, axis of symmetry)",
+          "Sketching vertical and horizontal translations y = ax^2 + c and y = a(x-h)^2",
+          "Sketching parabolas using x-intercepts y = a(x-p)(x-q)"
+        ]
+      }
+    ],
+    "inclusions": [
+      "Surds arithmetic (simplifying, adding, multiplying)",
+      "Simultaneous equations (substitution, elimination, graphical)",
+      "3D Pythagoras and Bearings",
+      "Parallel and perpendicular lines (m1 * m2 = -1)",
+      "Factorising monic and non-monic quadratics",
+      "Parabolas introduction and sketching",
+      "Box plots and IQR"
+    ],
+    "exclusions": [
+      "NO Logarithms (Year 10 5.3)",
+      "NO Non-right angled trig / Sine and Cosine rules (Year 10 5.3)",
+      "NO Circle geometry proofs (Year 10 5.3)",
+      "NO Polynomial division or remainder theorem (Year 10 5.3 / Year 11 Ext 1)"
     ]
   }
 }

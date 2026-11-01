@@ -2160,6 +2160,8 @@ with c3:
         level_opts = ["Standard", "Advanced", "Extension"]
     elif subject == "Maths" and "Year 12" in year_group:
         level_opts = ["Standard", "Advanced", "Extension 1", "Extension 2"]
+    elif subject == "Maths" and "Year 9" in year_group:
+        level_opts = ["Advanced", "Standard"]
     elif subject == "English" and ("Year 11" in year_group or "Year 12" in year_group):
         level_opts = ["Standard", "Advanced", "EALD", "Extension"]
     else:
