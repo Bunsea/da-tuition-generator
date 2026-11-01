@@ -2376,15 +2376,16 @@ if generate_btn:
             elif actual_level in ["Extension", "Extension 1"]:
                 level_ban = (
                     " EXTENSION 1 SYLLABUS RULES: 3D Trigonometry IS ALLOWED & REQUIRED for 3D trig topics (ME-T1). "
-                    "VECTORS IN EXTENSION 1: Year 12 Extension 1 Vectors explicitly includes BOTH 2D Vectors and 3D Vectors (3D component form xi + yj + zk, column vectors, 3D magnitude, 3D dot/scalar product, angles between vectors in 3D, parallel and perpendicular vectors in 3D, and 3D geometric applications). "
-                    "CRITICAL EXTENSION 1 TRIGONOMETRY BANS: "
+                    "VECTORS IN EXTENSION 1: Year 12 Extension 1 Vectors explicitly includes BOTH 2D Vectors and 3D Vectors (3D component form xi + yj + zk, column vectors, 3D magnitude, 3D dot/scalar product, angles between vectors in 3D, and parallel and perpendicular vectors in 3D). "
+                    "CRITICAL EXTENSION 1 BANS: "
+                    "- NO VECTOR PROOFS: Geometric proofs using vectors (vector proofs) are STRICTLY BANNED in Year 11 & Year 12 Extension 1. Vector proofs belong exclusively in Mathematics Extension 2! NEVER generate questions requiring students to prove geometric theorems with vectors in Extension 1. "
                     "- The t-method / t-formulae (t = tan(theta/2)) and product-to-sum and sum-to-product (differences) trigonometric identities are NO LONGER part of Year 11 or Year 12 Maths Extension 1! They belong EXCLUSIVELY in Maths Extension 2. NEVER generate t-method, t-formulae, or product-to-sum/difference questions in Extension 1. "
                     "- REMEMBER: Euclidean circle proofs, division of an interval, and the Pigeonhole Principle are strictly banned in Extension 1. "
-                    "- DO NOT include Extension 2 exclusive topics (Complex Numbers, Proof by Contradiction/Contrapositive, Integration by Parts, Volumes by Slicing & Cylindrical Shells, Mechanics/Resisted Motion)."
+                    "- DO NOT include Extension 2 exclusive topics (Complex Numbers, Proof by Contradiction/Contrapositive, Integration by Parts, Volumes by Slicing & Cylindrical Shells, Mechanics/Resisted Motion, Geometric Vector Proofs)."
                 )
             elif actual_level in ["Extension 2"]:
                 level_ban = (
-                    " EXTENSION 2 SYLLABUS RULES: Follow the Mathematics Extension 2 syllabus: Proof (Nature of Proof), Vectors (Further 3D Vectors, vector equations of lines/curves, 3D vector geometry proofs), Complex Numbers, Calculus (Further Integration, Volumes by Slicing & Cylindrical Shells), Mechanics (Resisted Motion, Simple Harmonic Motion). "
+                    " EXTENSION 2 SYLLABUS RULES: Follow the Mathematics Extension 2 syllabus: Proof (Nature of Proof, Vector Proofs / Geometric proofs using vectors), Vectors (Further 3D Vectors, vector equations of lines/curves, 3D vector geometry proofs), Complex Numbers, Calculus (Further Integration, Volumes by Slicing & Cylindrical Shells), Mechanics (Resisted Motion, Simple Harmonic Motion). "
                     "NOTE ON TRIGONOMETRY: The t-method / t-formulae (t = tan(x/2) substitutions) and product-to-sum and sum-to-product (differences) trigonometric identities belong EXCLUSIVELY in Maths Extension 2 (e.g. in Further Integration and Advanced Proofs/Identities). "
                     "CRITICAL EXTENSION 2 BANS: The Pigeonhole Principle is STRICTLY BANNED across all courses including Extension 2. DO NOT include obsolete pre-2019 topics like Conics or Harder Circle Geometry."
                 )
@@ -2427,9 +2428,10 @@ if generate_btn:
                 elif actual_level in ["Extension", "Extension 1"]:
                     yr_ban = (
                         " YEAR 12 EXTENSION 1 BOUNDARIES: "
-                        "(1) 3D VECTORS ARE EXPLICITLY INCLUDED: Year 12 Mathematics Extension 1 Vectors explicitly includes questions on 3D Vectors (three-dimensional components in xi + yj + zk or column vectors, magnitude in 3D, addition/subtraction, scalar multiplication, dot/scalar product in 3D, angles between 3D vectors, parallel/perpendicular conditions in 3D, and geometric applications in 3D space). Ensure that questions on Vectors in Year 12 Extension 1 include 3D vectors as well as 2D vectors! "
-                        "(2) NO t-method / t-formulae and NO product-to-sum or sum-to-product difference trig identities in Year 12 Extension 1 (they are exclusively in Extension 2). "
-                        "(3) NO Pigeonhole Principle."
+                        "(1) 3D VECTORS ARE EXPLICITLY INCLUDED: Year 12 Mathematics Extension 1 Vectors explicitly includes questions on 3D Vectors (three-dimensional components in xi + yj + zk or column vectors, magnitude in 3D, addition/subtraction, scalar multiplication, dot/scalar product in 3D, angles between 3D vectors, and parallel/perpendicular conditions in 3D). Ensure that questions on Vectors in Year 12 Extension 1 include 3D vectors as well as 2D vectors! "
+                        "(2) NO VECTOR PROOFS: Geometric proofs using vectors (vector proofs, such as proving geometric properties of triangles, parallelograms, rhombuses, or circles using vector algebra) are STRICTLY BANNED in Year 12 Extension 1. Vector proofs belong exclusively in Mathematics Extension 2! "
+                        "(3) NO t-method / t-formulae and NO product-to-sum or sum-to-product difference trig identities in Year 12 Extension 1 (they are exclusively in Extension 2). "
+                        "(4) NO Pigeonhole Principle."
                     )
                     
             syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {actual_level} syllabus.{universal_ban}{level_ban}{yr_ban}"
