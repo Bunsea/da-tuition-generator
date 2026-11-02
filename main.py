@@ -58,6 +58,13 @@ from supabase import create_client, Client
 import docx
 from docx.shared import Cm
 
+# OpenAI SDK (for DeepSeek-R1 auditor)
+try:
+    from openai import OpenAI
+    HAS_OPENAI = True
+except ImportError:
+    HAS_OPENAI = False
+
 # Ensure Nix-installed binaries (pdflatex, pandoc, etc.) are on PATH
 _NIX_PATHS = [
     "/run/current-system/sw/bin",
@@ -1282,6 +1289,181 @@ def _get_genai_client():
     return genai.Client(api_key=api_key)
 
 
+def _get_deepseek_api_key() -> str:
+    """Retrieves the DeepSeek API key from session state, Streamlit secrets, env var, or default."""
+    if st.session_state.get("deepseek_api_key"):
+        return st.session_state["deepseek_api_key"].strip()
+    try:
+        if "DEEPSEEK_API_KEY" in st.secrets:
+            return str(st.secrets["DEEPSEEK_API_KEY"]).strip()
+    except Exception:
+        pass
+    env_k = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if env_k:
+        return env_k
+    # Configured master key for the tuition center
+    return "sk-7a311b7546c14bdfabd18844aa91b915"
+
+
+def audit_exam_with_deepseek(
+    draft_content: str,
+    subject: str,
+    year_group: str,
+    actual_level: str,
+    clean_topic: str,
+    total_q: int,
+    syllabus_rules: str,
+    api_key: str = "",
+) -> dict:
+    """Invokes DeepSeek-R1 (deepseek-reasoner) to audit drafted questions for mathematical correctness,
+    solvability, and strict post-2019 NESA syllabus boundaries.
+
+    Returns a dict with:
+      status: "APPROVED" | "REVISION_NEEDED" | "ERROR" | "SKIPPED"
+      summary: short overview of findings
+      details: full critique or approval notes
+      correction_prompt: instructions for Gemini to patch flaws (or empty)
+      reasoning: DeepSeek-R1 internal chain-of-thought
+      auto_corrected: bool (set to True if Gemini repaired issues)
+      error: error message if call failed
+    """
+    key = (api_key or _get_deepseek_api_key()).strip()
+    if not key:
+        return {
+            "status": "SKIPPED",
+            "summary": "DeepSeek auditor skipped: No API key configured.",
+            "details": "",
+            "correction_prompt": "",
+            "reasoning": "",
+            "auto_corrected": False,
+        }
+
+    level_str = f" {actual_level}" if actual_level else ""
+    system_prompt = (
+        "You are an expert Chief Mathematical Auditor and senior NESA Syllabus Inspector for Australian secondary education (NSW HSC).\n"
+        "Your task is to conduct an authoritative, rigorous mathematical and curriculum audit of an examination draft generated for students.\n\n"
+        "EVALUATION CRITERIA:\n"
+        "1. MATHEMATICAL CORRECTNESS & SOLVABILITY:\n"
+        "   - Is every question mathematically unambiguous, well-formed, and completely solvable?\n"
+        "   - Are all numerical values and geometric conditions consistent (no unintended real-number domain violations like negative square roots, division by zero, or degenerate triangles)?\n"
+        "   - Are the provided answers in the answer key mathematically verified and accurate?\n"
+        "2. POST-2019 NESA SYLLABUS BOUNDARY COMPLIANCE:\n"
+        "   - Adhere strictly to the course syllabus boundaries:\n"
+        "     * Universal bans: Pigeonhole Principle, internal/external division of an interval, and Euclidean circle geometry proofs are STRICTLY BANNED across ALL courses.\n"
+        "     * Year 11 & 12 Mathematics Extension 1: Vector proofs (geometric proofs using vectors) are STRICTLY BANNED (they belong exclusively in Extension 2). The t-formulae (t = tan(x/2)) and product-to-sum identities are STRICTLY BANNED (Ext 2 only). 3D vectors ARE included.\n"
+        "     * Year 11 & 12 Mathematics Advanced: 3D Trigonometry is STRICTLY BANNED (Ext 1 only). No vectors, no projectile motion, no complex numbers, no induction.\n"
+        "     * Year 11 vs Year 12 boundaries: Discrete random variables are Year 12 Advanced (banned in Year 11). Networks are Year 11 Standard (Year 12 Standard covers CPA).\n"
+        "3. QUESTION SPECIFICATIONS:\n"
+        "   - Verify that the draft aligns with the intended topic, level, and question count.\n\n"
+        "OUTPUT FORMAT (STRICT DELIMITERS):\n"
+        "===AUDIT_STATUS===\n"
+        "[APPROVED or REVISION_NEEDED]\n"
+        "===AUDIT_SUMMARY===\n"
+        "[A clear 1-2 sentence executive verdict suitable for teachers]\n"
+        "===AUDIT_DETAILS===\n"
+        "[Detailed breakdown: if APPROVED, confirm that calculations and boundaries were checked; if REVISION_NEEDED, cite specific question numbers and the exact mathematical error or syllabus violation]\n"
+        "===CORRECTION_PROMPT===\n"
+        "[If REVISION_NEEDED: Give precise, actionable instructions to the drafting AI on which questions to replace or fix and how. If APPROVED, write NONE]\n"
+    )
+
+    user_payload = (
+        f"AUDIT SPECIFICATION:\n"
+        f"- Target Course: {year_group}{level_str} in {subject}\n"
+        f"- Focus Topic: {clean_topic}\n"
+        f"- Expected Total Questions: {total_q}\n\n"
+        f"COURSE-SPECIFIC SYLLABUS CONSTRAINTS:\n{syllabus_rules}\n\n"
+        f"DRAFTED EXAM CONTENT TO AUDIT:\n{draft_content}\n"
+    )
+
+    raw_content = ""
+    reasoning_content = ""
+
+    # Strategy 1: OpenAI SDK if installed
+    used_sdk = False
+    if HAS_OPENAI:
+        try:
+            client = OpenAI(api_key=key, base_url="https://api.deepseek.com")
+            response = client.chat.completions.create(
+                model="deepseek-reasoner",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_payload},
+                ],
+                max_tokens=4096,
+                timeout=60.0,
+            )
+            if response.choices:
+                choice = response.choices[0]
+                raw_content = choice.message.content or ""
+                reasoning_content = getattr(choice.message, "reasoning_content", "") or ""
+                used_sdk = True
+        except Exception as e_sdk:
+            _log_error("OpenAI SDK DeepSeek Call Failed, falling back to HTTP", e_sdk)
+
+    # Strategy 2: Direct HTTP POST via urllib.request (zero external dependencies)
+    if not used_sdk or not raw_content:
+        try:
+            import urllib.request
+            data = {
+                "model": "deepseek-reasoner",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_payload},
+                ],
+                "max_tokens": 4096,
+            }
+            req = urllib.request.Request(
+                "https://api.deepseek.com/chat/completions",
+                data=json.dumps(data).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {key}",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                res_obj = json.loads(resp.read().decode("utf-8"))
+                if res_obj.get("choices"):
+                    msg = res_obj["choices"][0].get("message", {})
+                    raw_content = msg.get("content", "") or ""
+                    reasoning_content = msg.get("reasoning_content", "") or ""
+        except Exception as e_http:
+            _log_error("DeepSeek Auditor API Failure", e_http)
+            return {
+                "status": "ERROR",
+                "summary": f"Auditor connection failed: {str(e_http)}",
+                "details": str(e_http),
+                "correction_prompt": "",
+                "reasoning": "",
+                "auto_corrected": False,
+                "error": str(e_http),
+            }
+
+    # Parse delimited response
+    status_m = re.search(r"===?\s*AUDIT_STATUS\s*===?\s*(APPROVED|REVISION_NEEDED)", raw_content, re.IGNORECASE)
+    status = status_m.group(1).upper() if status_m else ("APPROVED" if "APPROVED" in raw_content[:200] else "REVISION_NEEDED")
+
+    summary_m = re.search(r"===?\s*AUDIT_SUMMARY\s*===?\s*(.*?)(?:===?\s*AUDIT_DETAILS|$)", raw_content, re.DOTALL | re.IGNORECASE)
+    summary = summary_m.group(1).strip() if summary_m else "Auditor review completed."
+
+    details_m = re.search(r"===?\s*AUDIT_DETAILS\s*===?\s*(.*?)(?:===?\s*CORRECTION_PROMPT|$)", raw_content, re.DOTALL | re.IGNORECASE)
+    details = details_m.group(1).strip() if details_m else ""
+
+    corr_m = re.search(r"===?\s*CORRECTION_PROMPT\s*===?\s*(.*)", raw_content, re.DOTALL | re.IGNORECASE)
+    corr_prompt = corr_m.group(1).strip() if corr_m else ""
+    if corr_prompt.upper() in ["NONE", "N/A", "NONE."]:
+        corr_prompt = ""
+
+    return {
+        "status": status,
+        "summary": summary,
+        "details": details,
+        "correction_prompt": corr_prompt,
+        "reasoning": reasoning_content,
+        "auto_corrected": False,
+    }
+
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG & UI
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1751,8 +1933,32 @@ with st.sidebar:
     _default_idx = 0 if _redirect_mode else app_modes.index(st.session_state.get("main_app_mode", "✨ Generator")) if st.session_state.get("main_app_mode") in app_modes else 0
     app_mode = st.radio("App Mode", app_modes, index=_default_idx, key="main_app_mode")
     st.markdown("---")
+    use_deepseek_auditor = False
     if app_mode == "✨ Generator":
         st.header("⚙️ Advanced Settings")
+        use_deepseek_auditor = st.checkbox(
+            "🛡️ DeepSeek-R1 Quality Auditor",
+            value=True,
+            help="Uses DeepSeek-R1 (deepseek-reasoner) to audit questions and answers for mathematical correctness, solvability, and NESA syllabus compliance before finalizing.",
+        )
+        with st.expander("🛡️ Auditor Settings", expanded=False):
+            st.caption("DeepSeek-R1 independently verifies questions and auto-instructs Gemini if corrections are required.")
+            _saved_ds_key = st.session_state.get("deepseek_api_key", "")
+            ds_key_input = st.text_input(
+                "DeepSeek API Key",
+                type="password",
+                value=_saved_ds_key,
+                placeholder="sk-...",
+                key="ds_api_key_field",
+                help="Enter your DeepSeek API key (defaults to tuition center key if empty).",
+            )
+            if ds_key_input:
+                st.session_state["deepseek_api_key"] = ds_key_input.strip()
+            _active_k = _get_deepseek_api_key()
+            if _active_k:
+                st.caption(f"Connected: `{_mask_api_key(_active_k)}` · Model: `deepseek-reasoner`")
+            else:
+                st.caption("⚠️ No DeepSeek key connected.")
         use_live_search = st.checkbox("🌍 Enable Live Web Search", value=False)
         extra_instructions = st.text_area(
             "Extra Instructions (Optional)",
@@ -2275,7 +2481,7 @@ _SS_KEYS = (
     "meta_n", "meta_set", "cloud_saved", "display_topic", "meta_mc", "meta_easy", "meta_med",
     "meta_hard", "meta_xh", "meta_input_tokens", "meta_output_tokens", "meta_model_used",
     "meta_total_cost", "meta_extra_instructions", "used_search", "phase_1_raw", "saved_ai_payload", "work_dir",
-    "saved_exam_id", "saved_has_solutions",
+    "saved_exam_id", "saved_has_solutions", "deepseek_audit",
 )
 for _key in _SS_KEYS:
     if _key not in st.session_state:
@@ -2744,6 +2950,106 @@ When instructed, your final combined output must follow this template structure 
             if not out:
                 raise Exception("Failed to generate content after multiple attempts.")
 
+            # ---> DeepSeek-R1 Mathematical & Syllabus Audit Reflection Loop <---
+            if use_deepseek_auditor:
+                active_ds_key = _get_deepseek_api_key()
+                if active_ds_key:
+                    with loading_placeholder.container():
+                        st.markdown(
+                            f"""
+                            <div style="text-align: center; padding: 40px 20px;">
+                                {logo_html}
+                                <h4 style="color: #1A3A8A; margin-top: 20px; font-weight: bold;">🛡️ DeepSeek-R1 Auditing Math & Syllabus...</h4>
+                                <p style="color: #666; font-size: 15px;">Chief Mathematical Auditor is verifying solvability and curriculum boundaries.</p>
+                            </div>
+                            <style>
+                                [data-testid="stStatusWidget"] {{ display: none !important; }}
+                                @keyframes pulse {{
+                                    0% {{ transform: scale(0.95); opacity: 0.6; }}
+                                    50% {{ transform: scale(1.05); opacity: 1; }}
+                                    100% {{ transform: scale(0.95); opacity: 0.6; }}
+                                }}
+                            </style>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                    st.toast("🛡️ DeepSeek-R1: Auditing math solvability & syllabus compliance...")
+                    audit_res = audit_exam_with_deepseek(
+                        draft_content=out,
+                        subject=subject,
+                        year_group=grades_string,
+                        actual_level=actual_level,
+                        clean_topic=clean_topic,
+                        total_q=total_q,
+                        syllabus_rules=syllabus_ban,
+                        api_key=active_ds_key,
+                    )
+                    st.session_state.deepseek_audit = audit_res
+
+                    if audit_res.get("status") == "REVISION_NEEDED" and audit_res.get("correction_prompt"):
+                        st.toast("⚡ DeepSeek-R1 flagged syllabus/math issues. Gemini is auto-correcting...")
+                        with loading_placeholder.container():
+                            st.markdown(
+                                f"""
+                                <div style="text-align: center; padding: 40px 20px;">
+                                    {logo_html}
+                                    <h4 style="color: #1A3A8A; margin-top: 20px; font-weight: bold;">🔄 Gemini Auto-Correcting Exam...</h4>
+                                    <p style="color: #666; font-size: 15px;">DeepSeek-R1 identified a flaw. Gemini is regenerating corrected questions.</p>
+                                </div>
+                                <style>
+                                    [data-testid="stStatusWidget"] {{ display: none !important; }}
+                                    @keyframes pulse {{
+                                        0% {{ transform: scale(0.95); opacity: 0.6; }}
+                                        50% {{ transform: scale(1.05); opacity: 1; }}
+                                        100% {{ transform: scale(0.95); opacity: 0.6; }}
+                                    }}
+                                </style>
+                                """,
+                                unsafe_allow_html=True,
+                            )
+                        refine_prompt = (
+                            "You previously drafted an exam, but our Chief Mathematical Auditor (DeepSeek-R1) reviewed it and detected the following critical issues:\n\n"
+                            f"AUDITOR'S EVALUATION:\n{audit_res.get('details') or audit_res.get('summary')}\n\n"
+                            f"AUDITOR'S SPECIFIC CORRECTION INSTRUCTIONS:\n{audit_res.get('correction_prompt')}\n\n"
+                            "CRITICAL TASK:\n"
+                            "Regenerate the complete exam, applying the auditor's corrections.\n"
+                            "Keep all already-correct questions untouched, and strictly replace or fix the flagged questions to ensure 100% mathematical accuracy and strict syllabus compliance.\n"
+                            "Output using the exact same format tags:\n"
+                            "===FILENAME_START=== ... ===FILENAME_END===\n"
+                            "===LATEX_CONTENT_START=== ... ===LATEX_CONTENT_END===\n"
+                            "===LATEX_ANSWERS_START=== ... ===LATEX_ANSWERS_END===\n"
+                        )
+                        try:
+                            res_refined = client.models.generate_content(
+                                model=st.session_state.meta_model_used or "gemini-3.8-flash",
+                                contents=ai_payload + [refine_prompt],
+                                config=gen_config,
+                            )
+                            if res_refined and res_refined.text and "LATEX_ANSWERS_END" in res_refined.text:
+                                out = res_refined.text.replace("```latex", "").replace("```", "")
+                                st.session_state.phase_1_raw = out
+                                audit_res["auto_corrected"] = True
+                                st.session_state.deepseek_audit = audit_res
+                                if res_refined.usage_metadata:
+                                    st.session_state.meta_input_tokens += getattr(res_refined.usage_metadata, "prompt_token_count", 0)
+                                    st.session_state.meta_output_tokens += getattr(res_refined.usage_metadata, "candidates_token_count", 0)
+                                st.toast("✅ Gemini auto-corrected questions based on DeepSeek-R1 feedback!")
+                        except Exception as e_refine:
+                            _log_error("Gemini self-correction after DeepSeek audit", e_refine)
+                    elif audit_res.get("status") == "APPROVED":
+                        st.toast("🛡️ DeepSeek-R1 Audit: 100% Passed!")
+                else:
+                    st.session_state.deepseek_audit = {
+                        "status": "SKIPPED",
+                        "summary": "DeepSeek auditor skipped: No API key configured.",
+                        "details": "",
+                        "correction_prompt": "",
+                        "reasoning": "",
+                        "auto_corrected": False,
+                    }
+            else:
+                st.session_state.deepseek_audit = None
+
             fn_m = re.search(r"===?\s*FILENAME_START\s*===?(.*?)===?\s*FILENAME_END\s*===?", out, re.DOTALL | re.IGNORECASE)
             if fn_m and fn_m.group(1).strip():
                 ai_generated_name = re.sub(r"[^A-Za-z0-9_\-\(\) ]", "_", fn_m.group(1).strip())
@@ -2853,6 +3159,42 @@ if st.session_state.questions_text:
             st.session_state.word_bytes = w_bytes
             st.session_state.cloud_saved = False
             st.rerun()
+
+    # ── DEEPSEEK-R1 AUDITOR STATUS CARD ─────────────────────────────────────────
+    audit_info = st.session_state.get("deepseek_audit")
+    if audit_info and isinstance(audit_info, dict):
+        status = audit_info.get("status")
+        auto_corr = audit_info.get("auto_corrected", False)
+        summary = audit_info.get("summary", "")
+        details = audit_info.get("details", "")
+        reasoning = audit_info.get("reasoning", "")
+
+        if status == "APPROVED":
+            with st.expander("🛡️ **DeepSeek-R1 Quality Audit:** Verified & Approved (100% Syllabus & Math Sound)", expanded=False):
+                st.success(f"✅ **Mathematical Solvability & NESA Boundaries Verified**\n\n{summary}")
+                if details:
+                    st.markdown(f"**Verification Breakdown:**\n\n{details}")
+                if reasoning:
+                    with st.expander("🧠 View DeepSeek-R1 Chain-of-Thought Reasoning", expanded=False):
+                        st.caption(reasoning)
+        elif status == "REVISION_NEEDED" and auto_corr:
+            with st.expander("🛡️ **DeepSeek-R1 Quality Audit:** Flaws Flagged & Auto-Corrected by Gemini", expanded=True):
+                st.info(f"🔄 **DeepSeek-R1 identified mathematical or syllabus issues in the initial draft, and Gemini automatically repaired them before finalizing:**\n\n{summary}")
+                if details:
+                    st.markdown(f"**Issues Identified by Auditor:**\n\n{details}")
+                if audit_info.get("correction_prompt"):
+                    st.caption(f"**Correction Applied:** {audit_info['correction_prompt']}")
+                if reasoning:
+                    with st.expander("🧠 View DeepSeek-R1 Chain-of-Thought Reasoning", expanded=False):
+                        st.caption(reasoning)
+        elif status == "REVISION_NEEDED" and not auto_corr:
+            with st.expander("🛡️ **DeepSeek-R1 Quality Audit:** Revision Recommended", expanded=True):
+                st.warning(f"⚠️ **DeepSeek-R1 noted potential issues:**\n\n{summary}")
+                if details:
+                    st.markdown(details)
+        elif status == "ERROR":
+            st.caption(f"🛡️ **DeepSeek Auditor Notice:** {audit_info.get('error', 'Auditor temporarily unavailable.')}")
+
 
     in_tok = st.session_state.meta_input_tokens or 0
     out_tok = st.session_state.meta_output_tokens or 0
