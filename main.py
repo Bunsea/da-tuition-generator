@@ -1461,14 +1461,22 @@ def audit_exam_with_deepseek(
                     reasoning_content = msg.get("reasoning_content", "") or ""
         except Exception as e_http:
             _log_error("DeepSeek Auditor API Failure", e_http)
+            err_msg = str(e_http)
+            if "402" in err_msg or "Payment Required" in err_msg:
+                friendly_err = "DeepSeek API account balance is empty ($0.00). Please top up credits at platform.deepseek.com to re-enable automated math auditing."
+            elif "401" in err_msg or "Unauthorized" in err_msg:
+                friendly_err = "Invalid DeepSeek API key. Please check your API key in settings."
+            else:
+                friendly_err = f"Auditor connection issue ({err_msg}). The exam was still generated successfully."
+
             return {
                 "status": "ERROR",
-                "summary": f"Auditor connection failed: {str(e_http)}",
-                "details": str(e_http),
+                "summary": friendly_err,
+                "details": err_msg,
                 "correction_prompt": "",
                 "reasoning": "",
                 "auto_corrected": False,
-                "error": str(e_http),
+                "error": friendly_err,
             }
 
     # Parse delimited response
