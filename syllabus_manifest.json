@@ -1458,6 +1458,22 @@
           "Investigating outliers and effect on mean/median",
           "Describing probability and two-way tables"
         ]
+      },
+      {
+        "num": "10",
+        "name": "Circles and Cylinders",
+        "subtopics": [
+          "Parts of a circle (centre, radius, diameter, circumference, chord, arc, sector, segment)",
+          "Circumference of a circle (C = 2*pi*r and C = pi*d)",
+          "Perimeter of sectors and composite figures containing circular arcs",
+          "Area of a circle (A = pi*r^2)",
+          "Area of sectors, quadrants, and semicircles",
+          "Area of composite shapes and shaded regions with circles and sectors",
+          "Surface area of cylinders (curved surface area and closed cylinders)",
+          "Volume of cylinders (V = pi*r^2*h)",
+          "Capacity of cylinders and unit conversions (cm^3 to mL and litres)",
+          "Real-world applications and worded problems with circles and cylinders"
+        ]
       }
     ],
     "exclusions": [
