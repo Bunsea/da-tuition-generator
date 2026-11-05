@@ -10,6 +10,8 @@ import base64
 import shutil
 import time
 import tempfile
+import concurrent.futures
+import threading
 import uuid
 import logging
 import ast
@@ -1293,24 +1295,30 @@ def _mask_api_key(key: str) -> str:
     return f"{key[:6]}••••••••{key[-4:]}"
 
 
+def _get_active_api_key() -> str:
+    """Returns the effective Gemini API key for the current user session."""
+    user_role = st.session_state.get("user_role", "senior")
+    if user_role == "junior":
+        return (st.session_state.get("user_api_key") or "").strip()
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not key:
+        key = (st.session_state.get("user_api_key") or "").strip()
+    return key
+
+
 def _get_genai_client():
     """Builds the Gemini client using role-specific API keys.
     Junior teachers strictly use their own API key to preserve school credits.
     Senior teachers use the server master API key.
     """
     user_role = st.session_state.get("user_role", "senior")
-    if user_role == "junior":
-        api_key = (st.session_state.get("user_api_key") or "").strip()
-        if not api_key:
+    api_key = _get_active_api_key()
+    if not api_key:
+        if user_role == "junior":
             st.error("⚠️ Missing personal Gemini API key. Please connect your API key in the sidebar.")
-            st.stop()
-    else:
-        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-        if not api_key:
-            api_key = (st.session_state.get("user_api_key") or "").strip()
-        if not api_key:
+        else:
             st.error("⚠️ The AI engine isn't configured (missing server API key). Please contact tech support before using the generator.")
-            st.stop()
+        st.stop()
     return genai.Client(api_key=api_key)
 
 
@@ -1486,6 +1494,895 @@ def audit_exam_with_deepseek(
         "reasoning": reasoning_content,
         "auto_corrected": False,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BACKGROUND EXAM GENERATION QUEUE & WORKER ENGINE
+# ══════════════════════════════════════════════════════════════════════════════
+GLOBAL_JOB_QUEUE: dict[str, dict] = {}
+GLOBAL_QUEUE_LOCK = threading.Lock()
+GLOBAL_JOB_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="DA_ExamWorker")
+
+
+def get_next_set_number_with_queue(subject: str, year: str, diff: str, topic: str, base_set: int = 0) -> int:
+    """Calculates the next available set number considering both Supabase and currently queued/running jobs."""
+    if base_set > 0:
+        return base_set
+    db_set = get_next_set_number(subject, year, diff, topic)
+    occupied = {db_set}
+    with GLOBAL_QUEUE_LOCK:
+        for j in GLOBAL_JOB_QUEUE.values():
+            if j.get("status") in ("QUEUED", "RUNNING", "COMPLETED"):
+                if (
+                    j.get("subject") == subject
+                    and j.get("year") == year
+                    and j.get("level") == diff
+                    and j.get("topic") == topic
+                ):
+                    s_num = j.get("meta_set")
+                    if isinstance(s_num, int) and s_num > 0:
+                        occupied.add(s_num)
+    next_s = 1
+    while next_s in occupied:
+        next_s += 1
+    return next_s
+
+
+def generate_exam_worker(params: dict, progress_cb=None) -> dict:
+    """Executes full exam generation and compilation in an isolated, thread-safe environment.
+    Can be run in foreground (with UI toasts/spinners) or in background worker threads."""
+    def _notify(msg: str):
+        if progress_cb:
+            try:
+                progress_cb(msg)
+            except Exception:
+                pass
+
+    try:
+        api_key = (params.get("api_key") or "").strip()
+        if not api_key:
+            return {"success": False, "error": "Missing Gemini API key."}
+
+        client = genai.Client(api_key=api_key)
+
+        year_group = params.get("year_group", [])
+        subject = params.get("subject", "Maths")
+        actual_level = params.get("actual_level", "")
+        clean_topic = params.get("clean_topic", "General")
+        sub_topic = params.get("sub_topic", "")
+        grades_string = params.get("grades_string", ", ".join(year_group))
+        current_set_number = params.get("current_set_number", 1)
+        display_topic = params.get("display_topic", f"{clean_topic} Set {current_set_number}")
+        total_q = params.get("total_q", 10)
+        num_mc = params.get("num_mc", 0)
+        num_easy = params.get("num_easy", 0)
+        num_med = params.get("num_med", 0)
+        num_hard = params.get("num_hard", 0)
+        num_xh = params.get("num_xh", 0)
+        layout_mode = params.get("layout_mode", "Exam (Space for working out)")
+        style_samples = params.get("style_samples", "")
+        extra_instructions = params.get("extra_instructions", "")
+        exemplar_questions = params.get("exemplar_questions", "")
+        uploaded_files_data = params.get("uploaded_files_data", [])
+        use_live_search = params.get("use_live_search", False)
+        created_by = params.get("created_by", "Teacher")
+        auto_solutions = params.get("auto_solutions", False)
+        use_deepseek_auditor = params.get("use_deepseek_auditor", False)
+        deepseek_api_key = params.get("deepseek_api_key", "")
+
+        has_upload = bool(uploaded_files_data)
+        has_mc = num_mc > 0
+        total_fr = num_easy + num_med + num_hard + num_xh
+        has_fr = total_fr > 0
+
+        if "Exam" in layout_mode:
+            layout_instruction = "CRITICAL SPACING & PAGE-BREAK RULE: Add `\\vspace*{4cm}` (or more) after EVERY Free-Response question and `\\vspace*{2.5cm}` after sub-questions. ALWAYS place the mark indicator (e.g., `\\hfill \\textbf{(2 marks)}`) directly at the end of the question text or equation, followed immediately by the `\\vspace*`. Keep each question and its space together."
+        else:
+            layout_instruction = "CRITICAL SPACING RULE: Add exactly `\\vspace{0.5cm}` after EVERY question and sub-question."
+
+        level_text = f" {actual_level}" if actual_level else ""
+
+        template_f = ""
+        auto_name_rule = ""
+        if has_upload:
+            template_f = "===FILENAME_START===\nSchool_Subject_Year_Level_AssessmentOrTopic\n===FILENAME_END===\n"
+            auto_name_rule = "12. AUTO-NAMING & TOPIC EXTRACTION: You MUST inspect the attached document(s) and extract the actual School Name (e.g. Bonnyrigg High School), Subject (e.g. Maths), Year Group (e.g. Year 9), and official Assessment Title / Term (e.g. Term 3 Exam, Assessment Task 2, Half Yearly). Format EXACTLY like this: School_Subject_Year_Level_AssessmentTitle (e.g. Bonnyrigg_High_School_Maths_Year_9_Acceleration_Term_3_Exam). If no term/exam title is given, use a concise topic summary. Use underscores. Place inside ===FILENAME_START=== and ===FILENAME_END=== tags. Keep this filename identical and consistent across generations for the same document."
+
+        template_c = "===LATEX_CONTENT_START===\n"
+        template_a = "===LATEX_ANSWERS_START===\n"
+
+        if has_mc:
+            template_c += "\\section*{Section 1}\n\\begin{enumerate}\n    \\item Multiple choice question...\n    \\begin{itemize}\n        \\item[(A)] Option 1\n        \\item[(B)] Option 2\n    \\end{itemize}\n\\end{enumerate}\n\n"
+            template_a += "\\section*{Section 1}\n\\begin{enumerate}\n    \\item A\n\\end{enumerate}\n\n"
+
+        if has_fr:
+            sec_title = "\\section*{Section 2}" if has_mc else "\\section*{Section 1}"
+            template_c += f"{sec_title}\n\\begin{{enumerate}}\n    \\item Single part question... \\hfill \\textbf{{(2 marks)}}\n    \\vspace{{...}}\n\\end{{enumerate}}\n"
+            template_a += f"{sec_title}\n\\begin{{enumerate}}\n    \\item $x = 5$\n\\end{{enumerate}}\n\n"
+
+        template_c += "===LATEX_CONTENT_END==="
+        template_a += "===LATEX_ANSWERS_END==="
+
+        strict_negatives = ""
+        if not has_fr:
+            strict_negatives = "CRITICAL: DO NOT GENERATE ANY FREE-RESPONSE QUESTIONS OR A SECTION 2. ONLY GENERATE MULTIPLE CHOICE."
+        elif not has_mc:
+            strict_negatives = "CRITICAL: DO NOT GENERATE ANY MULTIPLE CHOICE QUESTIONS."
+
+        # Syllabus ban logic
+        if subject == "Maths":
+            universal_ban = (
+                " CRITICAL NESA SYLLABUS BANS (ALL MATHS COURSES): "
+                "(1) PIGEONHOLE PRINCIPLE IS STRICTLY BANNED — NEVER generate questions on or using the Pigeonhole Principle in ANY year or level (completely removed from the syllabus). "
+                "(2) Locus / Focus-Directrix parabola geometry (e.g. x^2 = 4ay, chords of contact, parametric tangents/normals), "
+                "(3) Euclidean Circle Geometry proofs (alternate segment, cyclic quadrilaterals, intersecting chords), "
+                "(4) Division of an interval in a given ratio (internal/external division), "
+                "(5) Simpson's Rule."
+            )
+            level_ban = ""
+            if actual_level == "Advanced":
+                level_ban = (
+                    " CRITICAL ADVANCED LEVEL BANS: "
+                    "(1) 3D TRIGONOMETRY IS STRICTLY BANNED — Year 11 & 12 Advanced only covers 2D Trigonometry (Sine rule, Cosine rule, Area of triangle, Radians). 3D Trigonometry is exclusively an Extension 1 topic. "
+                    "(2) DO NOT include Extension 1/2 topics: t-method / t-formulae (t = tan(x/2)), Product-to-sum / sum-to-product (differences) identities, Compound/Double Angles (sin(A+B), cos(2A)), Auxiliary angle method (Rcos(x-a)), Inverse Trig functions, Polynomial division / Remainder theorem / Sum and product of roots, Combinatorics / Permutations & Combinations, Vectors, Projectile Motion, Mathematical Induction, Perpendicular Distance formula, Angle between two lines."
+                )
+            elif actual_level == "Standard":
+                level_ban = (
+                    " CRITICAL STANDARD LEVEL BANS: 3D Trigonometry is STRICTLY BANNED. NO Calculus, NO Radians, NO Advanced Polynomials, NO Logarithm laws, NO Compound/Double angle trigonometry, NO t-method/t-formulae, NO product-to-sum identities. Keep all math strictly within the NSW Mathematics Standard syllabus."
+                )
+            elif actual_level in ["Extension", "Extension 1"]:
+                level_ban = (
+                    " EXTENSION 1 SYLLABUS RULES: 3D Trigonometry IS ALLOWED & REQUIRED for 3D trig topics (ME-T1). "
+                    "VECTORS IN EXTENSION 1: Year 12 Extension 1 Vectors explicitly includes BOTH 2D Vectors and 3D Vectors (3D component form xi + yj + zk, column vectors, 3D magnitude, 3D dot/scalar product, angles between vectors in 3D, and parallel and perpendicular vectors in 3D). "
+                    "CRITICAL EXTENSION 1 BANS: "
+                    "- NO VECTOR PROOFS: Geometric proofs using vectors (vector proofs) are STRICTLY BANNED in Year 11 & Year 12 Extension 1. Vector proofs belong exclusively in Mathematics Extension 2! NEVER generate questions requiring students to prove geometric theorems with vectors in Extension 1. "
+                    "- The t-method / t-formulae (t = tan(theta/2)) and product-to-sum and sum-to-product (differences) trigonometric identities are NO LONGER part of Year 11 or Year 12 Maths Extension 1! They belong EXCLUSIVELY in Maths Extension 2. NEVER generate t-method, t-formulae, or product-to-sum/difference questions in Extension 1. "
+                    "- REMEMBER: Euclidean circle proofs, division of an interval, and the Pigeonhole Principle are strictly banned in Extension 1. "
+                    "- DO NOT include Extension 2 exclusive topics (Complex Numbers, Proof by Contradiction/Contrapositive, Integration by Parts, Volumes by Slicing & Cylindrical Shells, Mechanics/Resisted Motion, Geometric Vector Proofs)."
+                )
+            elif actual_level in ["Extension 2"]:
+                level_ban = (
+                    " EXTENSION 2 SYLLABUS RULES: Follow the Mathematics Extension 2 syllabus: Proof (Nature of Proof, Vector Proofs / Geometric proofs using vectors), Vectors (Further 3D Vectors, vector equations of lines/curves, 3D vector geometry proofs), Complex Numbers, Calculus (Further Integration, Volumes by Slicing & Cylindrical Shells), Mechanics (Resisted Motion, Simple Harmonic Motion). "
+                    "NOTE ON TRIGONOMETRY: The t-method / t-formulae (t = tan(x/2) substitutions) and product-to-sum and sum-to-product (differences) trigonometric identities belong EXCLUSIVELY in Maths Extension 2 (e.g. in Further Integration and Advanced Proofs/Identities). "
+                    "CRITICAL EXTENSION 2 BANS: The Pigeonhole Principle is STRICTLY BANNED across all courses including Extension 2. DO NOT include obsolete pre-2019 topics like Conics or Harder Circle Geometry."
+                )
+
+            yr_ban = ""
+            if "Year 11" in year_group and "Year 12" not in year_group:
+                if actual_level == "Standard":
+                    yr_ban = (
+                        " YEAR 11 STANDARD BOUNDARIES: "
+                        "(1) NETWORKING / NETWORK CONCEPTS IS NOW IN YEAR 11 STANDARD: Networks, vertices, edges, degrees, directed/undirected graphs, walks, trails, paths, circuits, cycles, Eulerian and Hamiltonian paths/circuits, trees, minimum spanning trees (Prim's algorithm), and shortest paths are explicitly INCLUDED in Year 11 Maths Standard. "
+                        "(2) RELATIVE FREQUENCY MOVED TO YEAR 12: DO NOT generate Relative Frequency in Year 11 Maths Standard (Relative Frequency has moved to Year 12 Maths Standard). "
+                        "(3) DO NOT generate Year 12 Standard topics: Normal Distribution, Z-scores, Annuities, Depreciation, Critical Path Analysis, Bivariate Data. DO NOT require manual calculation of standard deviation."
+                    )
+                elif actual_level == "Advanced":
+                    yr_ban = (
+                        " YEAR 11 ADVANCED BOUNDARIES: "
+                        "(1) DATA IS INCLUDED IN YEAR 11 ADVANCED: Single-variable data analysis, summary statistics (mean, median, mode, range, IQR, standard deviation), quartiles, box plots, frequency histograms, and identifying outliers are explicitly part of Year 11 Maths Advanced. "
+                        "(2) NO DISCRETE PROBABILITY DISTRIBUTIONS: Discrete Probability Distributions and Discrete Random Variables are STRICTLY BANNED from Year 11 Maths Advanced (they belong in Year 12 Maths Advanced). "
+                        "(3) DO NOT generate Year 12 Advanced topics: NO Integration / Area under curves / Volumes of revolution, NO Financial Mathematics (Superannuation, Annuities, Series loan repayments), NO Continuous Random Variables / Normal Distribution, NO Bivariate Data Analysis, NO Calculus applications to exponentials or trigonometrics. Year 11 differentiation is strictly limited to First Principles, Power Rule on polynomials, and basic Tangents/Normals."
+                    )
+                elif actual_level in ["Extension", "Extension 1"]:
+                    yr_ban = (
+                        " YEAR 11 EXTENSION 1 BOUNDARIES: "
+                        "(1) NO PIGEONHOLE PRINCIPLE: The Pigeonhole Principle is strictly banned and removed from Year 11 Extension 1 Combinatorics. "
+                        "(2) NO t-method or product-to-sum/difference trig identities (these are exclusively Extension 2). "
+                        "(3) DO NOT generate Year 12 Extension 1 topics: NO Proof by Mathematical Induction, NO Projectile Motion (Vectors), NO Trigonometric Equations via Auxiliary Angle Rcos(x-a), NO Differential Equations / Exponential Growth, NO Calculus of Inverse Trig Functions, NO Binomial Distribution / Normal Approximation. Year 11 Ext 1 is strictly limited to Functions & Polynomials, Further Trigonometry (3D Trig, Compound/Double angles), Permutations & Combinations (without Pigeonhole Principle), Vectors in 2D, and Rates of Change."
+                    )
+            elif "Year 12" in year_group:
+                if actual_level == "Standard":
+                    yr_ban = (
+                        " YEAR 12 STANDARD BOUNDARIES: "
+                        "(1) RELATIVE FREQUENCY IS IN YEAR 12 STANDARD: Relative frequency, experimental probability, multi-stage events, simulations, and expected frequency belong in Year 12 Maths Standard. "
+                        "(2) NETWORK CONCEPTS MOVED TO YEAR 11: Basic Network Concepts (vertices, edges, walks, Eulerian/Hamiltonian, minimum spanning trees, shortest paths) belongs in Year 11 Maths Standard. Year 12 Standard covers Critical Path Analysis (CPA) / Project Planning."
+                    )
+                elif actual_level == "Advanced":
+                    yr_ban = (
+                        " YEAR 12 ADVANCED BOUNDARIES: "
+                        "DISCRETE PROBABILITY DISTRIBUTIONS IS INCLUDED IN YEAR 12 ADVANCED: Discrete Probability Distributions, discrete random variables, probability mass functions P(X = x), probability distribution tables, expected value E(X) = mu, and variance Var(X) = sigma^2 are explicitly part of Year 12 Maths Advanced (alongside Continuous Probability Distributions and Normal Distribution)."
+                    )
+                elif actual_level in ["Extension", "Extension 1"]:
+                    yr_ban = (
+                        " YEAR 12 EXTENSION 1 BOUNDARIES: "
+                        "(1) 3D VECTORS ARE EXPLICITLY INCLUDED: Year 12 Mathematics Extension 1 Vectors explicitly includes questions on 3D Vectors (three-dimensional components in xi + yj + zk or column vectors, magnitude in 3D, addition/subtraction, scalar multiplication, dot/scalar product in 3D, angles between 3D vectors, and parallel/perpendicular conditions in 3D). Ensure that questions on Vectors in Year 12 Extension 1 include 3D vectors as well as 2D vectors! "
+                        "(2) NO VECTOR PROOFS: Geometric proofs using vectors (vector proofs, such as proving geometric properties of triangles, parallelograms, rhombuses, or circles using vector algebra) are STRICTLY BANNED in Year 12 Extension 1. Vector proofs belong exclusively in Mathematics Extension 2! "
+                        "(3) NO t-method / t-formulae and NO product-to-sum or sum-to-product difference trig identities in Year 12 Extension 1 (they are exclusively in Extension 2). "
+                        "(4) NO Pigeonhole Principle."
+                    )
+
+            syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {actual_level} syllabus.{universal_ban}{level_ban}{yr_ban}"
+        else:
+            syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {subject} syllabus. Ensure all diagrams, notations, reaction rates, equilibrium graphs, and scientific concepts follow official NSW HSC curriculum standards."
+
+        # Manifest grounding
+        manifest_data = load_syllabus_manifest()
+        matched_course = None
+        for y in year_group:
+            candidate_keys = [f"{y} {subject} {actual_level}".strip(), f"{y} {subject}".strip()]
+            for ck in candidate_keys:
+                if ck in manifest_data:
+                    matched_course = manifest_data[ck]
+                    break
+            if matched_course:
+                break
+
+        if matched_course:
+            textbook_ref = matched_course.get("textbook", "")
+            ch_list = [f"- Chapter {c['num']}: {c['name']} (Subtopics: {', '.join(c.get('subtopics', []))})" for c in matched_course.get("chapters", [])]
+            inclusions = matched_course.get("inclusions", [])
+            exclusions = matched_course.get("exclusions", [])
+            manifest_context = f"\n\nOFFICIAL SYLLABUS TEXTBOOK BENCHMARK ({textbook_ref}):\n"
+            manifest_context += "The following are the authoritative chapters and granular subtopics for this course:\n" + "\n".join(ch_list) + "\n"
+            if inclusions:
+                manifest_context += "\nMANDATORY INCLUSIONS:\n" + "\n".join([f"• {inc}" for inc in inclusions]) + "\n"
+            if exclusions:
+                manifest_context += "\nSTRICT EXCLUSIONS & BANS:\n" + "\n".join([f"• {exc}" for exc in exclusions]) + "\n"
+            syllabus_ban += manifest_context
+
+        dist_req = []
+        if num_mc > 0:
+            dist_req.append(f"{num_mc} Multiple Choice questions")
+        if num_easy > 0:
+            dist_req.append(f"{num_easy} Easy Free-Response questions")
+        if num_med > 0:
+            dist_req.append(f"{num_med} Medium Free-Response questions")
+        if num_hard > 0:
+            dist_req.append(f"{num_hard} Hard Free-Response questions")
+        if num_xh > 0:
+            dist_req.append(f"{num_xh} Extremely Hard Free-Response questions")
+
+        exam_focus = f"{clean_topic}" + (f" - specifically focusing on: {sub_topic}" if sub_topic else "")
+        style_block = f"STYLE & SYLLABUS REFERENCE:\n{style_samples}\n\n" if style_samples else ""
+        custom_instructions_block = f"EXTRA TUTOR INSTRUCTIONS:\n{extra_instructions}\n\n" if extra_instructions.strip() else ""
+
+        prompt = f"""You are a NESA Examiner.
+Generate an examination on "{exam_focus}" for {grades_string}{level_text} in {subject}.
+
+CRITICAL QUESTION DISTRIBUTION (OBEY EXACTLY): 
+- You MUST generate EXACTLY {total_q} questions in total.
+- Breakdown: {", ".join(dist_req)}
+- {strict_negatives}
+
+{style_block}
+
+EXAMINER RULES:
+1. SPELLING: Australian/UK English.
+2. MARKS: 1 to 3 marks per free-response. Reserve 3-marks for extreme difficulty. Make questions demanding.
+3. SUB-QUESTIONS: Use a nested `\\begin{{enumerate}}` environment so they format as (a), (b), (c).
+4. ANSWERS PAGE: Do NOT use display math (`\\[ ... \\]` or `$$...$$`) for the answers. Use inline math (`$...$`) so all answers naturally align left.
+5. {layout_instruction}
+6. "MISSING \\ITEM" CRASH PREVENTION: Immediately after starting a `\\begin{{enumerate}}` or `\\begin{{itemize}}`, the next command MUST be a valid `\\item` (e.g., `\\item` or `\\item[(A)]`). NEVER place `\\vspace`, text, or blank lines before the first item. Place all spacing commands AFTER the item text.
+7. SECTION TITLES: Name each section purely as "Section 1", "Section 2", etc. You MUST use the exact standard syntax `\\section*{{Section X}}`. CRITICAL: DO NOT add difficulty labels like "Easy Questions", "Medium Questions", or "Hard" to the section titles.
+8. MULTIPLE CHOICE: You MUST heavily randomize the correct answer options (A, B, C, D) across the multiple-choice section. The correct answer must NOT always be 'A'.
+9. PYTHON CALCULATOR SANDBOX (CRITICAL): You are equipped with a Python Code Execution tool. You MUST use it to calculate exact final decimal answers for strictly numeric topics like Financial Mathematics, Compound Interest, Annuities, or Statistics. 
+CRITICAL EXCEPTIONS: 
+- DO NOT use the Python tool for pure algebraic, calculus, or trigonometric topics (e.g., Parametrics, Inverse Functions, Polynomials, Integration). Evaluate symbolic algebra using your own internal reasoning.
+10. ATTACHED DOCUMENT & QUESTION CLONING RULE (CRITICAL):
+    - ASSESSMENT NOTIFICATION / SCOPE & SEQUENCE: If the attached document is an Assessment Notification or list of topics/outcomes, you MUST strictly and exclusively generate questions on the exact topics and skills listed in that document. Distribute questions across all listed areas. DO NOT generate questions on unlisted topics.
+    - QUESTION EXEMPLARS: If sample questions or past worksheet items are provided, reverse-engineer their mathematical mechanics, formatting phrasing, structural complexity, and cognitive depth to generate original parallel practice questions.
+11. CRITICAL OUTPUT FORMAT & NO COMMENTS: You must output ONLY the raw content. 
+    - Do NOT generate \\documentclass, \\usepackage, \\begin{{document}}, \\end{{document}}, or \\geometry.
+    - Provide raw LaTeX code that starts immediately with \\section* or \\begin{{enumerate}}.
+    - NEVER use the `%` symbol to write hidden code comments. Only use `%` for actual mathematical percentages (e.g., 50%).
+12. MANDATORY ENVIRONMENT CLOSING & BRACES: Every single `\\begin{{enumerate}}`, `\\begin{{itemize}}`, `\\begin{{align*}}`, or `\\begin{{tikzpicture}}` MUST have a matching `\\end{{...}}` tag with exact curly braces `{{...}}`.
+{syllabus_ban}
+{auto_name_rule}
+
+DIAGRAM RULES (CRITICAL):
+You have TWO graphing engines available. You MUST choose the correct one based on the diagram type.
+
+ENGINE 1: THE PYTHON ENGINE
+Use this strictly for continuous 2D Cartesian functions, derivatives, Projectile Motion trajectories, Slope Fields, and Normal Distributions.
+Syntax:
+GRAPH_START
+type: slope_field
+expr: x + y
+xmin: -5
+xmax: 5
+ymin: -5
+ymax: 5
+GRAPH_END
+
+ENGINE 2: NATIVE TikZ
+Use this strictly for structural geometry: Networks, Critical Paths, 3D Trig diagrams, 3D Vectors, Forces/Inclined Planes, and Box Plots. The compiler has `\\usepackage{{tikz}}` installed (do NOT use pgfplots). Inject your `\\begin{{tikzpicture}}` code directly into the LaTeX output.
+
+- BOX PLOTS & NUMBER LINES (CRITICAL):
+  * NEVER draw box plots using raw unscaled data coordinates if they exceed 12cm.
+  * ALWAYS scale your TikZ box plots so the entire number line spans between 10cm and 13cm in total width. Use `xscale` on the tikzpicture.
+  * For parallel box plots: Place group labels cleanly above the plots or with `node[left]`.
+
+CRITICAL GRAPHING REQUIREMENT:
+Whenever a question asks the student to "sketch" or "draw" a graph, you MUST provide the actual rendered graph in the Answers sections using the LaTeX `pgfplots` package. 
+- You must code the visual plot using \\begin{{tikzpicture}} \\begin{{axis}}[...] ... \\end{{axis}} \\end{{tikzpicture}}. 
+- NEVER just describe the graph in text. You must mathematically plot the curves, asymptotes, and intercepts using pgfplots.
+- NEVER use the setting `trig format plots=none`. If plotting trigonometric functions, use `trig format plots=rad` or omit the setting entirely.
+- PREVENT DIMENSION ERRORS: When plotting rational functions or graphs with vertical asymptotes, you MUST restrict the vertical plotting domain (`ymin=-10, ymax=10`, `restrict y to domain=-15:15`).
+- MANDATORY SEMICOLONS: Every single drawing command inside the axis environment MUST end with a semicolon (;).
+- TIKZ LABELS AND ANCHORS SECURING: Use explicit standard syntax (e.g., label=90:{{$P_1$}}).
+- TIKZ SYNTAX CRASH PREVENTION: NEVER place raw text inside a `\\draw` or `\\addplot` command path. Use a properly formatted `\\node`.
+- STRICT COORDINATE FORMATTING: When listing points in `\\addplot coordinates {{...}};`, output only raw coordinate pairs.
+- CHEMISTRY & SCIENCE EQUILIBRIUM GRAPHS (CRITICAL): Draw sudden disturbances with solid vertical lines at $t_1$. Use smooth continuous curves for gradual shifts.
+
+{custom_instructions_block}
+When instructed, your final combined output must follow this template structure exactly:
+{template_f}
+
+{template_c}
+
+{template_a}
+"""
+
+        ai_payload = [prompt]
+        if exemplar_questions.strip():
+            ai_payload.append(f"\n\n[CLONE EXEMPLARS - TEXT INPUT]:\n{exemplar_questions}")
+
+        if uploaded_files_data:
+            from pypdf import PdfReader
+            for file_info in uploaded_files_data:
+                doc_bytes = file_info.get("bytes", b"")
+                fname = (file_info.get("name") or "").lower()
+                is_pdf = fname.endswith(".pdf") or (file_info.get("type") == "application/pdf")
+
+                if is_pdf:
+                    rendered_any = False
+                    try:
+                        import pypdfium2 as pdfium
+                        pdf = pdfium.PdfDocument(doc_bytes)
+                        for page in pdf:
+                            pil_image = page.render(scale=2.0).to_pil()
+                            buf = io.BytesIO()
+                            pil_image.save(buf, format="JPEG", quality=85)
+                            ai_payload.append(types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg"))
+                        rendered_any = True
+                    except Exception:
+                        pass
+
+                    if not rendered_any:
+                        try:
+                            reader = PdfReader(io.BytesIO(doc_bytes))
+                            for page in reader.pages:
+                                for img_file in page.images:
+                                    img_name = img_file.name.lower()
+                                    img_mime = "image/png" if img_name.endswith(".png") else "image/jpeg"
+                                    ai_payload.append(types.Part.from_bytes(data=img_file.data, mime_type=img_mime))
+                                    rendered_any = True
+                        except Exception:
+                            pass
+
+                    try:
+                        reader = PdfReader(io.BytesIO(doc_bytes))
+                        pdf_text = "\n".join([page.extract_text() or "" for page in reader.pages]).strip()
+                        if pdf_text:
+                            ai_payload.append(f"\n\n[EXTRACTED PDF TEXT FROM {fname}]:\n{pdf_text}")
+                    except Exception:
+                        pass
+                else:
+                    mime_type = "image/png" if fname.endswith(".png") else ("image/webp" if fname.endswith(".webp") else "image/jpeg")
+                    ai_payload.append(types.Part.from_bytes(data=doc_bytes, mime_type=mime_type))
+
+            ai_payload.append(
+                "\n\n[ATTACHED DOCUMENTS INSTRUCTION - HIGHEST PRIORITY]:\n"
+                "Carefully analyze ALL attached documents/pages:\n"
+                "1. IF THE ATTACHMENTS ARE AN ASSESSMENT NOTIFICATION, EXAM NOTICE, OR TOPIC LIST:\n"
+                "   - Extract EVERY topic, sub-topic, and skill specified in the notification.\n"
+                "   - Your generated exam MUST STRICTLY AND EXCLUSIVELY focus on the topics, sub-topics, and syllabus outcomes listed across all uploaded pages.\n"
+                "   - DO NOT generate questions on unlisted topics.\n"
+                "   - Extract the School Name, Subject, Year Group, and Topic Summary to format the filename in ===FILENAME_START=== tags.\n"
+                "2. IF THE ATTACHMENTS CONTAIN SAMPLE / EXEMPLAR QUESTIONS OR A WORKSHEET:\n"
+                "   - Reverse-engineer the mechanics, phrasing, difficulty, and diagram styles of those exact questions, and generate original parallel practice questions testing the same competency."
+            )
+
+        live_search_subjects = ["Business Studies", "Legal Studies", "Science"]
+        active_tools = [types.Tool(code_execution=types.ToolCodeExecution())]
+        used_search = bool(subject in live_search_subjects and use_live_search)
+        if used_search:
+            active_tools.append(types.Tool(google_search=types.GoogleSearch()))
+
+        models_to_try = [
+            "gemini-3.8-flash",
+            "gemini-3.6-flash",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+        ]
+        out = None
+        last_error = None
+        model_used = None
+        in_tok = 0
+        out_tok = 0
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            for model_name in models_to_try:
+                cur_max_tok = 8192 if ("2.0" in model_name or "2.5" in model_name) else MAX_OUTPUT_TOKENS
+                tool_candidates = [[], active_tools] if (total_q >= 30 or not active_tools) else [active_tools, []]
+
+                for t_list in tool_candidates:
+                    try:
+                        cfg = types.GenerateContentConfig(
+                            max_output_tokens=cur_max_tok,
+                            tools=t_list if t_list else None,
+                            safety_settings=[
+                                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                            ],
+                        )
+                        _notify(f"🏃 {model_name}: Drafting Questions & Answers...")
+                        p1_payload = ai_payload + [
+                            "\n\nPHASE 1 INSTRUCTION: You must generate the exam questions AND the answer key. First, generate the questions between ===LATEX_CONTENT_START=== and ===LATEX_CONTENT_END===. Then, immediately generate the short answers between ===LATEX_ANSWERS_START=== and ===LATEX_ANSWERS_END===. Do NOT generate fully worked solutions."
+                        ]
+                        res1 = client.models.generate_content(model=model_name, contents=p1_payload, config=cfg)
+                        raw_text = _extract_genai_text(res1)
+                        if not raw_text or "LATEX_CONTENT_START" not in raw_text:
+                            raise ValueError(f"{model_name} returned incomplete text. Forcing retry...")
+
+                        # Graceful tag auto-completion
+                        if "LATEX_CONTENT_END" not in raw_text:
+                            if "LATEX_ANSWERS_START" in raw_text:
+                                raw_text = raw_text.replace("===LATEX_ANSWERS_START===", "===LATEX_CONTENT_END===\n===LATEX_ANSWERS_START===")
+                            else:
+                                raw_text += "\n===LATEX_CONTENT_END===\n===LATEX_ANSWERS_START===\n===LATEX_ANSWERS_END==="
+
+                        if "LATEX_ANSWERS_START" in raw_text and "LATEX_ANSWERS_END" not in raw_text:
+                            raw_text += "\n===LATEX_ANSWERS_END==="
+
+                        out = raw_text.replace("```latex", "").replace("```", "")
+                        model_used = model_name
+                        if res1.usage_metadata:
+                            in_tok += getattr(res1.usage_metadata, "prompt_token_count", 0)
+                            out_tok += getattr(res1.usage_metadata, "candidates_token_count", 0)
+                        break
+                    except Exception as e:
+                        last_error = e
+                        if t_list:
+                            continue
+                        else:
+                            if _is_retryable(e):
+                                time.sleep(1.5)
+                            break
+                if out:
+                    break
+            if out:
+                break
+            if attempt < max_retries - 1:
+                time.sleep((attempt + 1) * 3)
+
+        if not out:
+            raise (last_error or Exception("Failed to generate content after multiple attempts."))
+
+        # DeepSeek-R1 Quality Audit
+        audit_res = None
+        if use_deepseek_auditor:
+            active_ds_key = (deepseek_api_key or _get_deepseek_api_key()).strip()
+            if active_ds_key:
+                _notify("🛡️ DeepSeek-R1: Auditing math solvability & syllabus compliance...")
+                audit_res = audit_exam_with_deepseek(
+                    draft_content=out,
+                    subject=subject,
+                    year_group=grades_string,
+                    actual_level=actual_level,
+                    clean_topic=clean_topic,
+                    total_q=total_q,
+                    syllabus_rules=syllabus_ban,
+                    api_key=active_ds_key,
+                )
+                if audit_res.get("status") == "REVISION_NEEDED" and audit_res.get("correction_prompt"):
+                    _notify("⚡ Gemini: Auto-correcting questions based on DeepSeek audit...")
+                    refine_prompt = (
+                        "You previously drafted an exam, but our Chief Mathematical Auditor (DeepSeek-R1) reviewed it and detected the following critical issues:\n\n"
+                        f"AUDITOR'S EVALUATION:\n{audit_res.get('details') or audit_res.get('summary')}\n\n"
+                        f"AUDITOR'S SPECIFIC CORRECTION INSTRUCTIONS:\n{audit_res.get('correction_prompt')}\n\n"
+                        "CRITICAL TASK:\n"
+                        "Regenerate the complete exam, applying the auditor's corrections.\n"
+                        "Keep all already-correct questions untouched, and strictly replace or fix the flagged questions to ensure 100% mathematical accuracy and strict syllabus compliance.\n"
+                        "Output using the exact same format tags:\n"
+                        "===FILENAME_START=== ... ===FILENAME_END===\n"
+                        "===LATEX_CONTENT_START=== ... ===LATEX_CONTENT_END===\n"
+                        "===LATEX_ANSWERS_START=== ... ===LATEX_ANSWERS_END===\n"
+                    )
+                    refine_models = [model_used or "gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash"]
+                    for r_model in refine_models:
+                        cur_ref_tok = 8192 if ("2.0" in r_model or "2.5" in r_model) else MAX_OUTPUT_TOKENS
+                        try:
+                            ref_cfg = types.GenerateContentConfig(
+                                max_output_tokens=cur_ref_tok,
+                                safety_settings=[
+                                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                ],
+                            )
+                            res_refined = client.models.generate_content(
+                                model=r_model,
+                                contents=ai_payload + [refine_prompt],
+                                config=ref_cfg,
+                            )
+                            raw_ref = _extract_genai_text(res_refined)
+                            if raw_ref and "LATEX_CONTENT_START" in raw_ref:
+                                if "LATEX_CONTENT_END" not in raw_ref:
+                                    if "LATEX_ANSWERS_START" in raw_ref:
+                                        raw_ref = raw_ref.replace("===LATEX_ANSWERS_START===", "===LATEX_CONTENT_END===\n===LATEX_ANSWERS_START===")
+                                    else:
+                                        raw_ref += "\n===LATEX_CONTENT_END===\n===LATEX_ANSWERS_START===\n===LATEX_ANSWERS_END==="
+                                if "LATEX_ANSWERS_START" in raw_ref and "LATEX_ANSWERS_END" not in raw_ref:
+                                    raw_ref += "\n===LATEX_ANSWERS_END==="
+                                out = raw_ref.replace("```latex", "").replace("```", "")
+                                audit_res["auto_corrected"] = True
+                                if res_refined.usage_metadata:
+                                    in_tok += getattr(res_refined.usage_metadata, "prompt_token_count", 0)
+                                    out_tok += getattr(res_refined.usage_metadata, "candidates_token_count", 0)
+                                break
+                        except Exception:
+                            continue
+
+        # Extract filename if AI suggested one
+        fn_m = re.search(r"===?\s*FILENAME_START\s*===?(.*?)===?\s*FILENAME_END\s*===?", out, re.DOTALL | re.IGNORECASE)
+        if fn_m and fn_m.group(1).strip():
+            ai_generated_name = re.sub(r"[^A-Za-z0-9_\-\(\) ]", "_", fn_m.group(1).strip())
+            clean_topic = ai_generated_name.replace("_", " ")
+            display_topic = f"{clean_topic} Set {current_set_number}"
+
+        c_m = re.search(r"===?\s*LATEX_CONTENT_START\s*===?(.*?)(?:===?\s*LATEX_CONTENT_END\s*===?|===?\s*LATEX_ANSWERS_START|$)", out, re.DOTALL | re.IGNORECASE)
+        a_m = re.search(r"===?\s*LATEX_ANSWERS_START\s*===?(.*?)(?:===?\s*LATEX_ANSWERS_END\s*===?|$)", out, re.DOTALL | re.IGNORECASE)
+
+        q_sanitized = sanitize_ai_latex(c_m.group(1).strip() if c_m else "Failed.")
+        a_sanitized = sanitize_ai_latex(a_m.group(1).strip() if a_m else "Failed.")
+
+        # Phase 2: Solutions (if auto_solutions requested)
+        s_sanitized = ""
+        if auto_solutions:
+            _notify("🧠 Calculating deep step-by-step mathematical solutions...")
+            p2_payload = ai_payload + [
+                out,
+                "\n\nPHASE 2 INSTRUCTION: Excellent. Now, generate the step-by-step fully worked solutions for these EXACT questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===. Group trivial algebra. Show all key mathematical steps. Never use \\tag inside $$ ... $$ or \\[ ... \\]; use \\qquad (1) if numbering equations.",
+            ]
+            s_out = None
+            for s_model in models_to_try:
+                cur_max_tok = 8192 if ("2.0" in s_model or "2.5" in s_model) else MAX_OUTPUT_TOKENS
+                tool_candidates = [[], active_tools] if (total_q >= 30 or not active_tools) else [active_tools, []]
+                for t_list in tool_candidates:
+                    try:
+                        cfg = types.GenerateContentConfig(
+                            max_output_tokens=cur_max_tok,
+                            tools=t_list if t_list else None,
+                            safety_settings=[
+                                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                            ],
+                        )
+                        res2 = client.models.generate_content(model=s_model, contents=p2_payload, config=cfg)
+                        raw_s = _extract_genai_text(res2)
+                        if not raw_s or "LATEX_SOLUTIONS_START" not in raw_s:
+                            raise ValueError("Solutions truncated. Retrying...")
+                        if "LATEX_SOLUTIONS_END" not in raw_s:
+                            raw_s += "\n===LATEX_SOLUTIONS_END==="
+                        s_out = raw_s.replace("```latex", "").replace("```", "")
+                        if res2.usage_metadata:
+                            in_tok += getattr(res2.usage_metadata, "prompt_token_count", 0)
+                            out_tok += getattr(res2.usage_metadata, "candidates_token_count", 0)
+                        break
+                    except Exception:
+                        if t_list:
+                            continue
+                        break
+                if s_out:
+                    break
+
+            if s_out:
+                s_m = re.search(r"===?\s*LATEX_SOLUTIONS_START\s*===?(.*?)(?:===?\s*LATEX_SOLUTIONS_END\s*===?|$)", s_out, re.DOTALL | re.IGNORECASE)
+                s_sanitized = sanitize_ai_latex(s_m.group(1).strip() if s_m else "")
+
+        _notify("⚙️ Compiling PDF & Word documents...")
+        title = f"{grades_string} {subject}{level_text}".strip()
+        work_dir = tempfile.mkdtemp(prefix="da_exam_worker_")
+        p_bytes, t_bytes, w_bytes, log, word_reason = _render_exam_files(
+            work_dir, display_topic, title, q_sanitized, a_sanitized, s_sanitized, total_q
+        )
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+        model_lower = (model_used or "").lower()
+        if "3.8-flash" in model_lower or "3.7-flash" in model_lower or "3.6-flash" in model_lower:
+            in_cost = (in_tok / 1_000_000) * 0.75
+            out_cost = (out_tok / 1_000_000) * 3.75
+        elif "flash-lite" in model_lower:
+            in_cost = (in_tok / 1_000_000) * 0.10
+            out_cost = (out_tok / 1_000_000) * 0.40
+        elif "2.5-flash" in model_lower or "3.5-flash" in model_lower or "flash" in model_lower:
+            in_cost = (in_tok / 1_000_000) * 0.30
+            out_cost = (out_tok / 1_000_000) * 2.50
+        elif "pro" in model_lower:
+            in_cost = (in_tok / 1_000_000) * 1.50
+            out_cost = (out_tok / 1_000_000) * 6.00
+        else:
+            in_cost = (in_tok / 1_000_000) * 0.75
+            out_cost = (out_tok / 1_000_000) * 3.75
+
+        search_cost = 0.014 if used_search else 0.00
+        total_cost = in_cost + out_cost + search_cost
+
+        return {
+            "success": True,
+            "questions_text": q_sanitized,
+            "answers_text": a_sanitized,
+            "solutions_text": s_sanitized,
+            "pdf_bytes": p_bytes,
+            "tex_bytes": t_bytes,
+            "word_bytes": w_bytes,
+            "word_skip_reason": word_reason,
+            "compiler_log": log,
+            "meta_topic": clean_topic,
+            "meta_subject": subject,
+            "meta_year": grades_string,
+            "meta_diff": actual_level,
+            "meta_n": total_q,
+            "meta_set": current_set_number,
+            "display_topic": display_topic,
+            "cloud_saved": False,
+            "saved_exam_id": None,
+            "saved_has_solutions": bool(s_sanitized),
+            "meta_mc": num_mc,
+            "meta_easy": num_easy,
+            "meta_med": num_med,
+            "meta_hard": num_hard,
+            "meta_xh": num_xh,
+            "meta_extra_instructions": extra_instructions.strip() if extra_instructions else "",
+            "deepseek_audit": audit_res,
+            "meta_model_used": model_used,
+            "meta_input_tokens": in_tok,
+            "meta_output_tokens": out_tok,
+            "meta_total_cost": total_cost,
+            "used_search": used_search,
+            "phase_1_raw": out,
+            "saved_ai_payload": ai_payload,
+            "created_by": created_by,
+        }
+    except Exception as e:
+        _log_error("generate_exam_worker", e)
+        return {"success": False, "error": str(e), "raw_error": e}
+
+
+def submit_exam_job(params: dict, teacher_username: str = "") -> str:
+    """Submits an exam generation job to the background worker pool."""
+    job_id = str(uuid.uuid4())[:8]
+    with GLOBAL_QUEUE_LOCK:
+        GLOBAL_JOB_QUEUE[job_id] = {
+            "id": job_id,
+            "title": params.get("display_topic", "Exam"),
+            "year": params.get("grades_string", ""),
+            "subject": params.get("subject", ""),
+            "level": params.get("actual_level", ""),
+            "topic": params.get("clean_topic", ""),
+            "total_q": params.get("total_q", 0),
+            "meta_set": params.get("current_set_number", 1),
+            "auto_solutions": params.get("auto_solutions", False),
+            "created_at": datetime.now(),
+            "created_by": params.get("created_by", "Teacher"),
+            "username": teacher_username,
+            "status": "QUEUED",  # QUEUED, RUNNING, COMPLETED, FAILED
+            "progress": "Waiting in queue...",
+            "result": None,
+            "error": None,
+            "saved_to_cloud": False,
+        }
+
+    def _worker():
+        with GLOBAL_QUEUE_LOCK:
+            if job_id in GLOBAL_JOB_QUEUE:
+                GLOBAL_JOB_QUEUE[job_id]["status"] = "RUNNING"
+                GLOBAL_JOB_QUEUE[job_id]["progress"] = "Starting AI engine..."
+
+        def cb(msg):
+            with GLOBAL_QUEUE_LOCK:
+                if job_id in GLOBAL_JOB_QUEUE:
+                    GLOBAL_JOB_QUEUE[job_id]["progress"] = msg
+
+        try:
+            res = generate_exam_worker(params, progress_cb=cb)
+            with GLOBAL_QUEUE_LOCK:
+                if job_id in GLOBAL_JOB_QUEUE:
+                    if res.get("success"):
+                        GLOBAL_JOB_QUEUE[job_id]["status"] = "COMPLETED"
+                        GLOBAL_JOB_QUEUE[job_id]["progress"] = "Ready!"
+                        GLOBAL_JOB_QUEUE[job_id]["result"] = res
+                        GLOBAL_JOB_QUEUE[job_id]["title"] = res.get("display_topic", GLOBAL_JOB_QUEUE[job_id]["title"])
+                    else:
+                        GLOBAL_JOB_QUEUE[job_id]["status"] = "FAILED"
+                        GLOBAL_JOB_QUEUE[job_id]["error"] = res.get("error", "Generation failed.")
+                        GLOBAL_JOB_QUEUE[job_id]["progress"] = "Failed"
+        except Exception as e:
+            _log_error(f"background_job_{job_id}", e)
+            with GLOBAL_QUEUE_LOCK:
+                if job_id in GLOBAL_JOB_QUEUE:
+                    GLOBAL_JOB_QUEUE[job_id]["status"] = "FAILED"
+                    GLOBAL_JOB_QUEUE[job_id]["error"] = friendly_error_message(e)
+                    GLOBAL_JOB_QUEUE[job_id]["progress"] = "Failed"
+
+    GLOBAL_JOB_EXECUTOR.submit(_worker)
+    return job_id
+
+
+def _load_job_into_session_state(res: dict):
+    """Loads a completed job result dictionary directly into st.session_state for full previewing and editing."""
+    work_dir = _start_new_work_dir()
+    try:
+        if res.get("pdf_bytes"):
+            with open(os.path.join(work_dir, "exam.pdf"), "wb") as f:
+                f.write(res["pdf_bytes"])
+        if res.get("tex_bytes"):
+            with open(os.path.join(work_dir, "exam.tex"), "wb") as f:
+                f.write(res["tex_bytes"])
+        if res.get("word_bytes"):
+            with open(os.path.join(work_dir, "exam.docx"), "wb") as f:
+                f.write(res["word_bytes"])
+    except Exception:
+        pass
+
+    st.session_state.update({
+        "questions_text": res.get("questions_text", ""),
+        "answers_text": res.get("answers_text", ""),
+        "solutions_text": res.get("solutions_text", ""),
+        "pdf_bytes": res.get("pdf_bytes"),
+        "tex_bytes": res.get("tex_bytes"),
+        "word_bytes": res.get("word_bytes"),
+        "word_skip_reason": res.get("word_skip_reason"),
+        "compiler_log": res.get("compiler_log", ""),
+        "meta_topic": res.get("meta_topic", ""),
+        "meta_subject": res.get("meta_subject", ""),
+        "meta_year": res.get("meta_year", ""),
+        "meta_diff": res.get("meta_diff", ""),
+        "meta_n": res.get("meta_n", 0),
+        "meta_set": res.get("meta_set", 1),
+        "display_topic": res.get("display_topic", ""),
+        "cloud_saved": res.get("cloud_saved", False),
+        "saved_exam_id": res.get("saved_exam_id"),
+        "saved_has_solutions": res.get("saved_has_solutions", False),
+        "meta_mc": res.get("meta_mc", 0),
+        "meta_easy": res.get("meta_easy", 0),
+        "meta_med": res.get("meta_med", 0),
+        "meta_hard": res.get("meta_hard", 0),
+        "meta_xh": res.get("meta_xh", 0),
+        "meta_extra_instructions": res.get("meta_extra_instructions", ""),
+        "deepseek_audit": res.get("deepseek_audit"),
+        "meta_model_used": res.get("meta_model_used"),
+        "meta_input_tokens": res.get("meta_input_tokens", 0),
+        "meta_output_tokens": res.get("meta_output_tokens", 0),
+        "meta_total_cost": res.get("meta_total_cost", 0.0),
+        "used_search": res.get("used_search", False),
+        "phase_1_raw": res.get("phase_1_raw", ""),
+        "saved_ai_payload": res.get("saved_ai_payload", []),
+    })
+
+
+def render_exam_queue_dashboard():
+    """Renders active, queued, and completed background generation jobs."""
+    queued_ids = st.session_state.get("my_queued_job_ids", [])
+    if not queued_ids:
+        return
+
+    with GLOBAL_QUEUE_LOCK:
+        valid_jobs = [GLOBAL_JOB_QUEUE[jid] for jid in queued_ids if jid in GLOBAL_JOB_QUEUE]
+
+    if not valid_jobs:
+        return
+
+    st.markdown("---")
+    q_head_c1, q_head_c2, q_head_c3 = st.columns([3, 1, 1], vertical_alignment="center")
+    with q_head_c1:
+        st.markdown(f"### 📋 Active Exam Generation Queue ({len(valid_jobs)})")
+    with q_head_c2:
+        if st.button("🔄 Refresh Status", key="btn_refresh_q", help="Refresh progress of background jobs"):
+            st.rerun()
+    with q_head_c3:
+        if st.button("🗑️ Clear Done", key="btn_clear_done_q", help="Clear completed or failed jobs from this list"):
+            done_ids = {j["id"] for j in valid_jobs if j.get("status") in ("COMPLETED", "FAILED")}
+            st.session_state["my_queued_job_ids"] = [jid for jid in queued_ids if jid not in done_ids]
+            st.rerun()
+
+    for job in valid_jobs:
+        jid = job["id"]
+        status = job.get("status", "QUEUED")
+        title = job.get("title", "Exam")
+        total_q = job.get("total_q", 0)
+        progress = job.get("progress", "")
+        lvl = f" {job['level']}" if job.get("level") else ""
+        meta_line = f"{job.get('year', '')}{lvl} · {job.get('subject', '')} · {total_q} Questions"
+        if job.get("auto_solutions"):
+            meta_line += " · 🧠 With Solutions"
+
+        try:
+            card_container = st.container(border=True)
+        except TypeError:
+            card_container = st.container()
+        with card_container:
+            c_top1, c_top2 = st.columns([4, 2], vertical_alignment="center")
+            with c_top1:
+                st.markdown(f"**{title}**")
+                st.caption(meta_line)
+            with c_top2:
+                if status == "RUNNING":
+                    st.markdown('<span style="background-color:#E3F2FD; color:#1565C0; padding:4px 10px; border-radius:12px; font-weight:bold; font-size:13px;">🔄 Generating</span>', unsafe_allow_html=True)
+                elif status == "QUEUED":
+                    st.markdown('<span style="background-color:#FFF3E0; color:#E65100; padding:4px 10px; border-radius:12px; font-weight:bold; font-size:13px;">⏳ Queued</span>', unsafe_allow_html=True)
+                elif status == "COMPLETED":
+                    st.markdown('<span style="background-color:#E8F5E9; color:#2E7D32; padding:4px 10px; border-radius:12px; font-weight:bold; font-size:13px;">✅ Completed</span>', unsafe_allow_html=True)
+                elif status == "FAILED":
+                    st.markdown('<span style="background-color:#FFEBEE; color:#C62828; padding:4px 10px; border-radius:12px; font-weight:bold; font-size:13px;">❌ Failed</span>', unsafe_allow_html=True)
+
+            if status in ("RUNNING", "QUEUED"):
+                st.progress(0.65 if status == "RUNNING" else 0.15)
+                st.caption(f"ℹ️ {progress}")
+            elif status == "FAILED":
+                st.error(f"Error: {job.get('error', 'Unknown error')}")
+            elif status == "COMPLETED":
+                res = job.get("result", {})
+                b1, b2, b3 = st.columns([2, 2, 2])
+                with b1:
+                    if st.button("👁️ Load to Preview", key=f"q_view_{jid}", use_container_width=True):
+                        _load_job_into_session_state(res)
+                        st.toast(f"✅ Loaded {title} into Preview below!")
+                        st.rerun()
+                with b2:
+                    if res.get("pdf_bytes"):
+                        safe_fn = re.sub(r"[^A-Za-z0-9_\-]", "_", title)
+                        st.download_button(
+                            "📥 Download PDF",
+                            data=res["pdf_bytes"],
+                            file_name=f"{safe_fn}.pdf",
+                            mime="application/pdf",
+                            key=f"q_dl_{jid}",
+                            use_container_width=True,
+                        )
+                with b3:
+                    if not job.get("saved_to_cloud"):
+                        if st.button("💾 Save to Library", key=f"q_save_{jid}", use_container_width=True):
+                            s_ok, s_msg = save_to_supabase(
+                                res["meta_topic"], res["meta_subject"], res["meta_year"], res["meta_diff"],
+                                res["meta_set"], res["pdf_bytes"], res["word_bytes"],
+                                num_mc=res.get("meta_mc", 0), num_easy=res.get("meta_easy", 0),
+                                num_med=res.get("meta_med", 0), num_hard=res.get("meta_hard", 0),
+                                num_xh=res.get("meta_xh", 0),
+                                existing_id=None,
+                                cost=res.get("meta_total_cost"),
+                                model=res.get("meta_model_used"),
+                                extra_instructions=res.get("meta_extra_instructions", ""),
+                                created_by=res.get("created_by", "Teacher"),
+                                has_solutions=bool(res.get("solutions_text")),
+                                questions_text=res.get("questions_text", ""),
+                                answers_text=res.get("answers_text", ""),
+                            )
+                            if s_ok:
+                                job["saved_to_cloud"] = True
+                                st.toast(f"☁️ Saved {title} to Cloud Library!")
+                                st.rerun()
+                            else:
+                                st.error(f"Failed to save: {s_msg}")
+                    else:
+                        st.caption("☁️ Saved to Cloud Library")
+
+
+def render_exam_queue_section():
+    """Wrapper that enables live 3-second auto-refresh if jobs are actively processing."""
+    queued_ids = st.session_state.get("my_queued_job_ids", [])
+    if not queued_ids:
+        return
+    with GLOBAL_QUEUE_LOCK:
+        has_running = any(
+            GLOBAL_JOB_QUEUE.get(jid, {}).get("status") in ("RUNNING", "QUEUED")
+            for jid in queued_ids
+        )
+
+    if has_running and hasattr(st, "fragment"):
+        @st.fragment(run_every="3s")
+        def _frag_queue():
+            render_exam_queue_dashboard()
+        _frag_queue()
+    else:
+        render_exam_queue_dashboard()
 
 
 
@@ -2452,9 +3349,29 @@ available_topics = sorted(list(set(available_topics)), key=lambda x: [int(c) if 
 c4, c5, c6 = st.columns([3, 2, 1])
 with c4:
     if available_topics:
-        topic = st.multiselect("Topic", available_topics)
+        selected_topics = st.multiselect(
+            "Topic (Select from syllabus)",
+            available_topics,
+            help="Select one or more topics from the curriculum, or leave empty and type your own custom topic below.",
+            key="sel_topics_multi",
+        )
+        custom_topic_text = st.text_input(
+            "Or Custom Topic (type your own)",
+            placeholder="e.g. Circles and Cylinders, 3D Trigonometry, Matrices...",
+            help="Type any custom topic here if you want something not listed above.",
+            key="custom_topic_text",
+        )
+        combined_topics = list(selected_topics)
+        if custom_topic_text.strip():
+            combined_topics.append(custom_topic_text.strip())
+        topic = combined_topics
     else:
-        topic = st.text_input("Topic", placeholder="e.g. Algebra, Calculus")
+        custom_topic_text = st.text_input(
+            "Topic (type your own)",
+            placeholder="e.g. Algebra, Calculus, Financial Maths",
+            key="fallback_topic_text",
+        )
+        topic = [custom_topic_text.strip()] if custom_topic_text.strip() else []
 with c5:
     sub_topic = st.text_input("Specific Sub-topic (Optional)", placeholder="e.g. Slope Fields")
 with c6:
@@ -2540,698 +3457,166 @@ for _key in _SS_KEYS:
         st.session_state[_key] = None
 
 st.markdown("---")
-btn_col1, btn_col2 = st.columns([5, 1])
+c_opt1, c_opt2 = st.columns([3, 2])
+with c_opt1:
+    auto_solutions = st.checkbox(
+        "🧠 Include step-by-step Fully Worked Solutions automatically",
+        value=False,
+        help="If checked, the AI will also calculate and compile fully worked solutions into the document automatically.",
+    )
+
+btn_col1, btn_col2, btn_col3 = st.columns([3, 2, 1])
 with btn_col1:
-    generate_btn = st.button("✨ It's go time!", type="primary", use_container_width=True)
+    queue_btn = st.button(
+        "🚀 Add to Generation Queue",
+        type="primary",
+        use_container_width=True,
+        help="Queue this exam to generate in the background so you can start configuring your next exam immediately without waiting!",
+    )
 with btn_col2:
+    generate_now_btn = st.button(
+        "⚡ Generate Now (Wait)",
+        type="secondary",
+        use_container_width=True,
+        help="Generate immediately on this screen with live progress.",
+    )
+with btn_col3:
     if st.button("🗑 Clear", use_container_width=True):
         _old_wd = st.session_state.get("work_dir")
         if _old_wd and os.path.isdir(_old_wd):
             shutil.rmtree(_old_wd, ignore_errors=True)
         for _key in _SS_KEYS:
             st.session_state[_key] = None
+        st.session_state["sel_topics_multi"] = []
+        st.session_state["custom_topic_text"] = ""
+        st.session_state["fallback_topic_text"] = ""
         st.rerun()
 
-if generate_btn:
+# ── BACKGROUND GENERATION QUEUE MONITOR ────────────────────────────────────────
+render_exam_queue_section()
+
+if queue_btn or generate_now_btn:
     is_topic_empty = not topic or (isinstance(topic, str) and not topic.strip())
     has_upload = bool(uploaded_photos) if isinstance(uploaded_photos, list) else (uploaded_photos is not None)
     if not year_group:
         st.error("🚨 Action Required: Please select at least one **Year** group from the dropdown above.")
     elif is_topic_empty and not has_upload:
-        st.error("🚨 Action Required: Please enter a **Topic**, or upload photo(s) for the AI to extract.")
+        st.error("🚨 Action Required: Please enter or select a **Topic**, or upload photo(s) for the AI to extract.")
     elif total_q == 0:
         st.error("🚨 Action Required: Please select at least one question to generate.")
     else:
-        client = _get_genai_client()
+        api_key = _get_active_api_key()
+        user_role = st.session_state.get("user_role", "senior")
+        if not api_key:
+            if user_role == "junior":
+                st.error("⚠️ Missing personal Gemini API key. Please connect your API key in the sidebar.")
+            else:
+                st.error("⚠️ The AI engine isn't configured (missing server API key). Please contact tech support before using the generator.")
+            st.stop()
 
         if is_topic_empty and has_upload:
             clean_topic = "Topics from Attached Document"
-            exam_focus = "the exact topics, syllabus outcomes, and areas assessed in the attached document(s)"
         else:
             topic_list = topic if isinstance(topic, list) else [topic]
             clean_topic = ", ".join([re.sub(r"^\d+[\.\-]\s*", "", t).strip() for t in topic_list])
             if sub_topic:
                 safe_sub = sub_topic.replace("/", "-").replace("\\", "-")
                 clean_topic = f"{clean_topic} - {safe_sub}"
-            exam_focus = f"{clean_topic}" + (f" - specifically focusing on: {sub_topic}" if sub_topic else "")
 
         grades_string = ", ".join(year_group)
-        if set_number_input > 0:
-            current_set_number = int(set_number_input)
-        else:
-            current_set_number = get_next_set_number(subject, grades_string, actual_level, clean_topic)
+        current_set_number = get_next_set_number_with_queue(
+            subject, grades_string, actual_level, clean_topic, base_set=int(set_number_input)
+        )
         display_topic = f"{clean_topic} Set {current_set_number}"
 
-        style_block = f"STYLE & SYLLABUS REFERENCE:\n{style_samples}\n\n" if style_samples else ""
-        custom_instructions_block = f"EXTRA TUTOR INSTRUCTIONS:\n{extra_instructions}\n\n" if extra_instructions.strip() else ""
+        # Detach uploaded files into pure in-memory bytes/dicts so worker threads can read them safely
+        uploaded_files_data = []
+        if uploaded_photos:
+            photos_list = uploaded_photos if isinstance(uploaded_photos, list) else [uploaded_photos]
+            for photo in photos_list:
+                uploaded_files_data.append({
+                    "name": photo.name,
+                    "bytes": photo.getvalue(),
+                    "type": getattr(photo, "type", ""),
+                })
 
-        dist_req = []
-        if num_mc > 0:
-            dist_req.append(f"{num_mc} Multiple Choice questions")
-        total_fr = num_easy + num_med + num_hard + num_xh
-        if num_easy > 0:
-            dist_req.append(f"{num_easy} Easy Free-Response questions")
-        if num_med > 0:
-            dist_req.append(f"{num_med} Medium Free-Response questions")
-        if num_hard > 0:
-            dist_req.append(f"{num_hard} Hard Free-Response questions")
-        if num_xh > 0:
-            dist_req.append(f"{num_xh} Extremely Hard Free-Response questions")
+        job_params = {
+            "api_key": api_key,
+            "deepseek_api_key": _get_deepseek_api_key(),
+            "use_deepseek_auditor": use_deepseek_auditor,
+            "auto_solutions": auto_solutions,
+            "year_group": year_group,
+            "subject": subject,
+            "actual_level": actual_level,
+            "clean_topic": clean_topic,
+            "sub_topic": sub_topic,
+            "grades_string": grades_string,
+            "current_set_number": current_set_number,
+            "display_topic": display_topic,
+            "total_q": total_q,
+            "num_mc": num_mc,
+            "num_easy": num_easy,
+            "num_med": num_med,
+            "num_hard": num_hard,
+            "num_xh": num_xh,
+            "layout_mode": layout_mode,
+            "style_samples": style_samples,
+            "extra_instructions": extra_instructions,
+            "exemplar_questions": exemplar_questions,
+            "uploaded_files_data": uploaded_files_data,
+            "use_live_search": (subject in ["Business Studies", "Legal Studies", "Science"] and use_live_search),
+            "created_by": st.session_state.get("user_display_name", "Teacher"),
+        }
 
-        has_mc = num_mc > 0
-        has_fr = total_fr > 0
-
-        if "Exam" in layout_mode:
-            layout_instruction = "CRITICAL SPACING & PAGE-BREAK RULE: Add `\\vspace*{4cm}` (or more) after EVERY Free-Response question and `\\vspace*{2.5cm}` after sub-questions. ALWAYS place the mark indicator (e.g., `\\hfill \\textbf{(2 marks)}`) directly at the end of the question text or equation, followed immediately by the `\\vspace*`. Keep each question and its space together."
-        else:
-            layout_instruction = "CRITICAL SPACING RULE: Add exactly `\\vspace{0.5cm}` after EVERY question and sub-question."
-
-        level_text = f" {actual_level}" if actual_level else ""
-
-        template_f = ""
-        auto_name_rule = ""
-        if has_upload:
-            template_f = "===FILENAME_START===\nSchool_Subject_Year_Level_AssessmentOrTopic\n===FILENAME_END===\n"
-            auto_name_rule = "12. AUTO-NAMING & TOPIC EXTRACTION: You MUST inspect the attached document(s) and extract the actual School Name (e.g. Bonnyrigg High School), Subject (e.g. Maths), Year Group (e.g. Year 9), and official Assessment Title / Term (e.g. Term 3 Exam, Assessment Task 2, Half Yearly). Format EXACTLY like this: School_Subject_Year_Level_AssessmentTitle (e.g. Bonnyrigg_High_School_Maths_Year_9_Acceleration_Term_3_Exam). If no term/exam title is given, use a concise topic summary. Use underscores. Place inside ===FILENAME_START=== and ===FILENAME_END=== tags. Keep this filename identical and consistent across generations for the same document."
-
-        template_c = "===LATEX_CONTENT_START===\n"
-        template_a = "===LATEX_ANSWERS_START===\n"
-
-        if has_mc:
-            template_c += "\\section*{Section 1}\n\\begin{enumerate}\n    \\item Multiple choice question...\n    \\begin{itemize}\n        \\item[(A)] Option 1\n        \\item[(B)] Option 2\n    \\end{itemize}\n\\end{enumerate}\n\n"
-            template_a += "\\section*{Section 1}\n\\begin{enumerate}\n    \\item A\n\\end{enumerate}\n\n"
-
-        if has_fr:
-            sec_title = "\\section*{Section 2}" if has_mc else "\\section*{Section 1}"
-            template_c += f"{sec_title}\n\\begin{{enumerate}}\n    \\item Single part question... \\hfill \\textbf{{(2 marks)}}\n    \\vspace{{...}}\n\\end{{enumerate}}\n"
-            template_a += f"{sec_title}\n\\begin{{enumerate}}\n    \\item $x = 5$\n\\end{{enumerate}}\n\n"
-
-        template_c += "===LATEX_CONTENT_END==="
-        template_a += "===LATEX_ANSWERS_END==="
-
-        strict_negatives = ""
-        if not has_fr:
-            strict_negatives = "CRITICAL: DO NOT GENERATE ANY FREE-RESPONSE QUESTIONS OR A SECTION 2. ONLY GENERATE MULTIPLE CHOICE."
-        elif not has_mc:
-            strict_negatives = "CRITICAL: DO NOT GENERATE ANY MULTIPLE CHOICE QUESTIONS."
-
-        # ---> UPGRADED: Dynamic Post-2019 NESA Syllabus Guardrails <---
-        syllabus_ban = ""
-        if subject == "Maths":
-            universal_ban = (
-                " CRITICAL NESA SYLLABUS BANS (ALL MATHS COURSES): "
-                "(1) PIGEONHOLE PRINCIPLE IS STRICTLY BANNED — NEVER generate questions on or using the Pigeonhole Principle in ANY year or level (completely removed from the syllabus). "
-                "(2) Locus / Focus-Directrix parabola geometry (e.g. x^2 = 4ay, chords of contact, parametric tangents/normals), "
-                "(3) Euclidean Circle Geometry proofs (alternate segment, cyclic quadrilaterals, intersecting chords), "
-                "(4) Division of an interval in a given ratio (internal/external division), "
-                "(5) Simpson's Rule."
-            )
-            
-            level_ban = ""
-            if actual_level == "Advanced":
-                level_ban = (
-                    " CRITICAL ADVANCED LEVEL BANS: "
-                    "(1) 3D TRIGONOMETRY IS STRICTLY BANNED — Year 11 & 12 Advanced only covers 2D Trigonometry (Sine rule, Cosine rule, Area of triangle, Radians). 3D Trigonometry is exclusively an Extension 1 topic. "
-                    "(2) DO NOT include Extension 1/2 topics: t-method / t-formulae (t = tan(x/2)), Product-to-sum / sum-to-product (differences) identities, Compound/Double Angles (sin(A+B), cos(2A)), Auxiliary angle method (Rcos(x-a)), Inverse Trig functions, Polynomial division / Remainder theorem / Sum and product of roots, Combinatorics / Permutations & Combinations, Vectors, Projectile Motion, Mathematical Induction, Perpendicular Distance formula, Angle between two lines."
-                )
-            elif actual_level == "Standard":
-                level_ban = (
-                    " CRITICAL STANDARD LEVEL BANS: 3D Trigonometry is STRICTLY BANNED. NO Calculus, NO Radians, NO Advanced Polynomials, NO Logarithm laws, NO Compound/Double angle trigonometry, NO t-method/t-formulae, NO product-to-sum identities. Keep all math strictly within the NSW Mathematics Standard syllabus."
-                )
-            elif actual_level in ["Extension", "Extension 1"]:
-                level_ban = (
-                    " EXTENSION 1 SYLLABUS RULES: 3D Trigonometry IS ALLOWED & REQUIRED for 3D trig topics (ME-T1). "
-                    "VECTORS IN EXTENSION 1: Year 12 Extension 1 Vectors explicitly includes BOTH 2D Vectors and 3D Vectors (3D component form xi + yj + zk, column vectors, 3D magnitude, 3D dot/scalar product, angles between vectors in 3D, and parallel and perpendicular vectors in 3D). "
-                    "CRITICAL EXTENSION 1 BANS: "
-                    "- NO VECTOR PROOFS: Geometric proofs using vectors (vector proofs) are STRICTLY BANNED in Year 11 & Year 12 Extension 1. Vector proofs belong exclusively in Mathematics Extension 2! NEVER generate questions requiring students to prove geometric theorems with vectors in Extension 1. "
-                    "- The t-method / t-formulae (t = tan(theta/2)) and product-to-sum and sum-to-product (differences) trigonometric identities are NO LONGER part of Year 11 or Year 12 Maths Extension 1! They belong EXCLUSIVELY in Maths Extension 2. NEVER generate t-method, t-formulae, or product-to-sum/difference questions in Extension 1. "
-                    "- REMEMBER: Euclidean circle proofs, division of an interval, and the Pigeonhole Principle are strictly banned in Extension 1. "
-                    "- DO NOT include Extension 2 exclusive topics (Complex Numbers, Proof by Contradiction/Contrapositive, Integration by Parts, Volumes by Slicing & Cylindrical Shells, Mechanics/Resisted Motion, Geometric Vector Proofs)."
-                )
-            elif actual_level in ["Extension 2"]:
-                level_ban = (
-                    " EXTENSION 2 SYLLABUS RULES: Follow the Mathematics Extension 2 syllabus: Proof (Nature of Proof, Vector Proofs / Geometric proofs using vectors), Vectors (Further 3D Vectors, vector equations of lines/curves, 3D vector geometry proofs), Complex Numbers, Calculus (Further Integration, Volumes by Slicing & Cylindrical Shells), Mechanics (Resisted Motion, Simple Harmonic Motion). "
-                    "NOTE ON TRIGONOMETRY: The t-method / t-formulae (t = tan(x/2) substitutions) and product-to-sum and sum-to-product (differences) trigonometric identities belong EXCLUSIVELY in Maths Extension 2 (e.g. in Further Integration and Advanced Proofs/Identities). "
-                    "CRITICAL EXTENSION 2 BANS: The Pigeonhole Principle is STRICTLY BANNED across all courses including Extension 2. DO NOT include obsolete pre-2019 topics like Conics or Harder Circle Geometry."
-                )
-            
-            yr_ban = ""
-            if "Year 11" in year_group and "Year 12" not in year_group:
-                if actual_level == "Standard":
-                    yr_ban = (
-                        " YEAR 11 STANDARD BOUNDARIES: "
-                        "(1) NETWORKING / NETWORK CONCEPTS IS NOW IN YEAR 11 STANDARD: Networks, vertices, edges, degrees, directed/undirected graphs, walks, trails, paths, circuits, cycles, Eulerian and Hamiltonian paths/circuits, trees, minimum spanning trees (Prim's algorithm), and shortest paths are explicitly INCLUDED in Year 11 Maths Standard. "
-                        "(2) RELATIVE FREQUENCY MOVED TO YEAR 12: DO NOT generate Relative Frequency in Year 11 Maths Standard (Relative Frequency has moved to Year 12 Maths Standard). "
-                        "(3) DO NOT generate Year 12 Standard topics: Normal Distribution, Z-scores, Annuities, Depreciation, Critical Path Analysis, Bivariate Data. DO NOT require manual calculation of standard deviation."
-                    )
-                elif actual_level == "Advanced":
-                    yr_ban = (
-                        " YEAR 11 ADVANCED BOUNDARIES: "
-                        "(1) DATA IS INCLUDED IN YEAR 11 ADVANCED: Single-variable data analysis, summary statistics (mean, median, mode, range, IQR, standard deviation), quartiles, box plots, frequency histograms, and identifying outliers are explicitly part of Year 11 Maths Advanced. "
-                        "(2) NO DISCRETE PROBABILITY DISTRIBUTIONS: Discrete Probability Distributions and Discrete Random Variables are STRICTLY BANNED from Year 11 Maths Advanced (they belong in Year 12 Maths Advanced). "
-                        "(3) DO NOT generate Year 12 Advanced topics: NO Integration / Area under curves / Volumes of revolution, NO Financial Mathematics (Superannuation, Annuities, Series loan repayments), NO Continuous Random Variables / Normal Distribution, NO Bivariate Data Analysis, NO Calculus applications to exponentials or trigonometrics. Year 11 differentiation is strictly limited to First Principles, Power Rule on polynomials, and basic Tangents/Normals."
-                    )
-                elif actual_level in ["Extension", "Extension 1"]:
-                    yr_ban = (
-                        " YEAR 11 EXTENSION 1 BOUNDARIES: "
-                        "(1) NO PIGEONHOLE PRINCIPLE: The Pigeonhole Principle is strictly banned and removed from Year 11 Extension 1 Combinatorics. "
-                        "(2) NO t-method or product-to-sum/difference trig identities (these are exclusively Extension 2). "
-                        "(3) DO NOT generate Year 12 Extension 1 topics: NO Proof by Mathematical Induction, NO Projectile Motion (Vectors), NO Trigonometric Equations via Auxiliary Angle Rcos(x-a), NO Differential Equations / Exponential Growth, NO Calculus of Inverse Trig Functions, NO Binomial Distribution / Normal Approximation. Year 11 Ext 1 is strictly limited to Functions & Polynomials, Further Trigonometry (3D Trig, Compound/Double angles), Permutations & Combinations (without Pigeonhole Principle), Vectors in 2D, and Rates of Change."
-                    )
-            elif "Year 12" in year_group:
-                if actual_level == "Standard":
-                    yr_ban = (
-                        " YEAR 12 STANDARD BOUNDARIES: "
-                        "(1) RELATIVE FREQUENCY IS IN YEAR 12 STANDARD: Relative frequency, experimental probability, multi-stage events, simulations, and expected frequency belong in Year 12 Maths Standard. "
-                        "(2) NETWORK CONCEPTS MOVED TO YEAR 11: Basic Network Concepts (vertices, edges, walks, Eulerian/Hamiltonian, minimum spanning trees, shortest paths) belongs in Year 11 Maths Standard. Year 12 Standard covers Critical Path Analysis (CPA) / Project Planning."
-                    )
-                elif actual_level == "Advanced":
-                    yr_ban = (
-                        " YEAR 12 ADVANCED BOUNDARIES: "
-                        "DISCRETE PROBABILITY DISTRIBUTIONS IS INCLUDED IN YEAR 12 ADVANCED: Discrete Probability Distributions, discrete random variables, probability mass functions P(X = x), probability distribution tables, expected value E(X) = mu, and variance Var(X) = sigma^2 are explicitly part of Year 12 Maths Advanced (alongside Continuous Probability Distributions and Normal Distribution)."
-                    )
-                elif actual_level in ["Extension", "Extension 1"]:
-                    yr_ban = (
-                        " YEAR 12 EXTENSION 1 BOUNDARIES: "
-                        "(1) 3D VECTORS ARE EXPLICITLY INCLUDED: Year 12 Mathematics Extension 1 Vectors explicitly includes questions on 3D Vectors (three-dimensional components in xi + yj + zk or column vectors, magnitude in 3D, addition/subtraction, scalar multiplication, dot/scalar product in 3D, angles between 3D vectors, and parallel/perpendicular conditions in 3D). Ensure that questions on Vectors in Year 12 Extension 1 include 3D vectors as well as 2D vectors! "
-                        "(2) NO VECTOR PROOFS: Geometric proofs using vectors (vector proofs, such as proving geometric properties of triangles, parallelograms, rhombuses, or circles using vector algebra) are STRICTLY BANNED in Year 12 Extension 1. Vector proofs belong exclusively in Mathematics Extension 2! "
-                        "(3) NO t-method / t-formulae and NO product-to-sum or sum-to-product difference trig identities in Year 12 Extension 1 (they are exclusively in Extension 2). "
-                        "(4) NO Pigeonhole Principle."
-                    )
-                    
-            syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {actual_level} syllabus.{universal_ban}{level_ban}{yr_ban}"
-        else:
-            syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {subject} syllabus. Ensure all diagrams, notations, reaction rates, equilibrium graphs, and scientific concepts follow official NSW HSC curriculum standards."
-
-        # Grounding directly in official Cambridge New Syllabus textbook manifest
-        manifest_data = load_syllabus_manifest()
-        matched_course = None
-        for y in year_group:
-            candidate_keys = [
-                f"{y} {subject} {actual_level}".strip(),
-                f"{y} {subject}".strip()
-            ]
-            for ck in candidate_keys:
-                if ck in manifest_data:
-                    matched_course = manifest_data[ck]
-                    break
-            if matched_course:
-                break
-
-        if matched_course:
-            textbook_ref = matched_course.get("textbook", "")
-            ch_list = [f"- Chapter {c['num']}: {c['name']} (Subtopics: {', '.join(c.get('subtopics', []))})" for c in matched_course.get("chapters", [])]
-            inclusions = matched_course.get("inclusions", [])
-            exclusions = matched_course.get("exclusions", [])
-            
-            manifest_context = f"\n\nOFFICIAL SYLLABUS TEXTBOOK BENCHMARK ({textbook_ref}):\n"
-            manifest_context += "The following are the authoritative chapters and granular subtopics for this course:\n" + "\n".join(ch_list) + "\n"
-            if inclusions:
-                manifest_context += "\nMANDATORY INCLUSIONS:\n" + "\n".join([f"• {inc}" for inc in inclusions]) + "\n"
-            if exclusions:
-                manifest_context += "\nSTRICT EXCLUSIONS & BANS:\n" + "\n".join([f"• {exc}" for exc in exclusions]) + "\n"
-            syllabus_ban += manifest_context
-
-        prompt = f"""You are a NESA Examiner.
-Generate an examination on "{exam_focus}" for {grades_string}{level_text} in {subject}.
-
-CRITICAL QUESTION DISTRIBUTION (OBEY EXACTLY): 
-- You MUST generate EXACTLY {total_q} questions in total.
-- Breakdown: {", ".join(dist_req)}
-- {strict_negatives}
-
-{style_block}
-
-EXAMINER RULES:
-1. SPELLING: Australian/UK English.
-2. MARKS: 1 to 3 marks per free-response. Reserve 3-marks for extreme difficulty. Make questions demanding.
-3. SUB-QUESTIONS: Use a nested `\\begin{{enumerate}}` environment so they format as (a), (b), (c).
-4. ANSWERS PAGE: Do NOT use display math (`\\[ ... \\]` or `$$...$$`) for the answers. Use inline math (`$...$`) so all answers naturally align left.
-5. {layout_instruction}
-6. "MISSING \ITEM" CRASH PREVENTION: Immediately after starting a `\\begin{{enumerate}}` or `\\begin{{itemize}}`, the next command MUST be a valid `\\item` (e.g., `\\item` or `\\item[(A)]`). NEVER place `\\vspace`, text, or blank lines before the first item. Place all spacing commands AFTER the item text.
-7. SECTION TITLES: Name each section purely as "Section 1", "Section 2", etc. You MUST use the exact standard syntax `\\section*{{Section X}}`. CRITICAL: DO NOT add difficulty labels like "Easy Questions", "Medium Questions", or "Hard" to the section titles.
-8. MULTIPLE CHOICE: You MUST heavily randomize the correct answer options (A, B, C, D) across the multiple-choice section. The correct answer must NOT always be 'A'.
-9. PYTHON CALCULATOR SANDBOX (CRITICAL): You are equipped with a Python Code Execution tool. You MUST use it to calculate exact final decimal answers for strictly numeric topics like Financial Mathematics, Compound Interest, Annuities, or Statistics. 
-CRITICAL EXCEPTIONS: 
-- DO NOT use the Python tool for pure algebraic, calculus, or trigonometric topics (e.g., Parametrics, Inverse Functions, Polynomials, Integration). Evaluate symbolic algebra using your own internal reasoning.
-10. ATTACHED DOCUMENT & QUESTION CLONING RULE (CRITICAL):
-    - ASSESSMENT NOTIFICATION / SCOPE & SEQUENCE: If the attached document is an Assessment Notification or list of topics/outcomes (e.g., lists Probability, Data Analysis, Surface Area, Volume, etc.), you MUST strictly and exclusively generate questions on the exact topics and skills listed in that document. Distribute questions across all listed areas. DO NOT generate questions on unlisted topics (such as Algebra, Indices, or Financial Maths if they are not listed in the notification).
-    - QUESTION EXEMPLARS: If sample questions or past worksheet items are provided, reverse-engineer their mathematical mechanics, formatting phrasing, structural complexity, and cognitive depth to generate original parallel practice questions.
-11. CRITICAL OUTPUT FORMAT & NO COMMENTS: You must output ONLY the raw content. 
-    - Do NOT generate \\documentclass, \\usepackage, \\begin{{document}}, \\end{{document}}, or \\geometry.
-    - Provide raw LaTeX code that starts immediately with \\section* or \\begin{{enumerate}}.
-    - NEVER use the `%` symbol to write hidden code comments (e.g. `% Vertex` or `% Graph starts here`). The system automatically escapes all `%` symbols into `\\%`, so if you place them inside option brackets or coordinate lists, the `pgfplots` compiler will fatally crash trying to read them as math. Only use `%` for actual mathematical percentages (e.g., 50%).
-12. MANDATORY ENVIRONMENT CLOSING & BRACES: Every single `\\begin{{enumerate}}`, `\\begin{{itemize}}`, `\\begin{{align*}}`, or `\\begin{{tikzpicture}}` MUST have a matching `\\end{{...}}` tag with exact curly braces `{{...}}` (NEVER write angle brackets like `\\end{{enumerate>` or omit closing braces). You must meticulously check that no environments are left open or malformed, as unclosed environments will crash the compiler.
-{syllabus_ban}
-{auto_name_rule}
-
-DIAGRAM RULES (CRITICAL):
-You have TWO graphing engines available. You MUST choose the correct one based on the diagram type.
-
-ENGINE 1: THE PYTHON ENGINE
-Use this strictly for continuous 2D Cartesian functions, derivatives, Projectile Motion trajectories, Slope Fields, and Normal Distributions.
-Syntax:
-GRAPH_START
-type: slope_field
-expr: x + y
-xmin: -5
-xmax: 5
-ymin: -5
-ymax: 5
-GRAPH_END
-
-ENGINE 2: NATIVE TikZ
-Use this strictly for structural geometry: Networks, Critical Paths, 3D Trig diagrams, 3D Vectors, Forces/Inclined Planes, and Box Plots. The compiler has `\\usepackage{{tikz}}` installed (do NOT use pgfplots). Inject your `\\begin{{tikzpicture}}` code directly into the LaTeX output.
-
-- BOX PLOTS & NUMBER LINES (CRITICAL):
-  * NEVER draw box plots using raw unscaled data coordinates if they exceed 12cm (e.g., coordinates like `(20,0) -- (100,0)` without scaling create a 100cm wide diagram that runs off the page!).
-  * ALWAYS scale your TikZ box plots so the entire number line spans between 10cm and 13cm in total width. Use `xscale` on the tikzpicture:
-    - If scores range 0 to 100, use `\\begin{{tikzpicture}}[xscale=0.12]`.
-    - If data ranges 10 to 30, use `\\begin{{tikzpicture}}[xscale=0.6]`.
-  * For parallel box plots: Place group labels (e.g., 'Greenhouse A', 'Greenhouse B' or 'Method 1', 'Method 2') cleanly above the plots or with `node[left]`, ensuring they do not push the axis past the right page margin.
-
-CRITICAL GRAPHING REQUIREMENT:
-Whenever a question asks the student to "sketch" or "draw" a graph, you MUST provide the actual rendered graph in the Answers sections using the LaTeX `pgfplots` package. 
-- You must code the visual plot using \\begin{{tikzpicture}} \\begin{{axis}}[...] ... \\end{{axis}} \\end{{tikzpicture}}. 
-- NEVER just describe the graph in text. You must mathematically plot the curves, asymptotes, and intercepts using pgfplots.
-- NEVER use the setting `trig format plots=none` in your axis options. It does not exist and will crash the compiler. If plotting trigonometric functions, use `trig format plots=rad` or omit the setting entirely.
-- PREVENT DIMENSION ERRORS: When plotting rational functions or graphs with vertical asymptotes, you MUST restrict the vertical plotting domain to prevent "Dimension too large" LaTeX crashes. You must include `ymin=-10, ymax=10` (or appropriate limits) inside the \\begin{{axis}}[...] options, AND you must include `restrict y to domain=-15:15` inside the \\addplot[...] options to safely clip the asymptotes.
-- MANDATORY SEMICOLONS: Every single drawing command inside the axis environment MUST end with a semicolon (;). Do not forget the semicolon, or the LaTeX compiler will crash.
-- TIKZ LABELS AND ANCHORS SECURING: When creating labels or polar positioning elements in TikZ, you MUST use explicit standard syntax (e.g., label=90:{{$P_1$}}). NEVER use shorthand styles like [90:P_1] directly inside bracket options, as this will trigger a fatal pgfkeys compiler crash.
-- TIKZ SYNTAX CRASH PREVENTION: NEVER place raw text, descriptions, or unformatted comments directly inside a `\\draw` or `\\addplot` command path. If you need to add text to a diagram, you MUST use a properly formatted `\\node` at a specific coordinate (e.g., `\\node at (2,4) {{Text}};`).
-- STRICT COORDINATE FORMATTING (CRITICAL): When listing points in `\\addplot coordinates {{...}};`, you MUST ONLY output the raw coordinate pairs. NEVER add text, labels, or `%` comments next to the points. For example, writing `(0,5) % Y-intercept` or `(2,9) % Vertex` will fatally crash the compiler. Output only the pure coordinates: `(0,5) (2,9) (5,0)`.
-- CHEMISTRY & SCIENCE EQUILIBRIUM GRAPHS (CRITICAL):
-  * INSTANTANEOUS DISTURBANCES AT $t_1$: In Reaction Rate vs Time and Concentration vs Time graphs, whenever an instantaneous disturbance occurs (e.g. adding or removing a reactant/product, or an instantaneous pressure/volume change), the sudden jump MUST be drawn with a solid vertical line at $t_1$ connecting the pre-disturbance baseline directly to the new instantaneous peak value (e.g., `\\draw[thick] (t1, base_y) -- (t1, jump_y);`). NEVER leave a floating gap or disconnected curve starting in mid-air.
-  * GRADUAL RESPONSES: For gradual changes (e.g. reverse rate responding over time, temperature changes, or concentrations shifting toward a new equilibrium between $t_1$ and $t_2$), use smooth continuous curves.
-  * NO TEXT-LINE OVERLAPPING: Never let plot lines pass directly through text labels (such as 'Forward rate', 'Reverse rate', or chemical formulas). Always position text labels cleanly above or below curves using `node[above right]`, `node[above]`, `node[below]`, or `fill=white, inner sep=1.5pt`.
-
-{custom_instructions_block}
-When instructed, your final combined output must follow this template structure exactly:
-{template_f}
-
-{template_c}
-
-{template_a}
-"""
-
-        logo_html = ""
-        if os.path.exists(LOGO_PATH):
-            try:
-                logo_b64 = base64.b64encode(open(LOGO_PATH, "rb").read()).decode()
-                logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="animation: pulse 1.5s infinite ease-in-out; width: 120px; height: auto;" />'
-            except Exception:
-                logo_html = '<h1 style="font-size: 80px;">✨</h1>'
-        else:
-            logo_html = '<h1 style="font-size: 80px;">✨</h1>'
-
-        loading_placeholder = st.empty()
-        with loading_placeholder.container():
-            st.markdown(
-                f"""
-                <div style="text-align: center; padding: 40px 20px;">
-                    {logo_html}
-                    <h4 style="color: #1A3A8A; margin-top: 20px; font-weight: bold;">✨ Drafting Worksheet...</h4>
-                    <p style="color: #666; font-size: 15px;">Fast-compiling questions and short answers for {display_topic}.</p>
-                </div>
-                <style>
-                    [data-testid="stStatusWidget"] {{ display: none !important; }}
-                    @keyframes pulse {{
-                        0% {{ transform: scale(0.95); opacity: 0.6; }}
-                        50% {{ transform: scale(1.05); opacity: 1; }}
-                        100% {{ transform: scale(0.95); opacity: 0.6; }}
-                    }}
-                </style>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        try:
-            max_retries = 3
-            out = None
-            for attempt in range(max_retries):
+        if queue_btn:
+            job_id = submit_exam_job(job_params, teacher_username=st.session_state.get("username", ""))
+            st.session_state.setdefault("my_queued_job_ids", []).append(job_id)
+            st.toast(f"🚀 Queued: {display_topic}! Generating in background. You can now configure another exam.")
+            st.rerun()
+        elif generate_now_btn:
+            logo_html = ""
+            if os.path.exists(LOGO_PATH):
                 try:
-                    live_search_subjects = ["Business Studies", "Legal Studies", "Science"]
-
-                    active_tools = [types.Tool(code_execution=types.ToolCodeExecution())]
-                    if subject in live_search_subjects and use_live_search:
-                        active_tools.append(types.Tool(google_search=types.GoogleSearch()))
-
-                    gen_config = types.GenerateContentConfig(
-                        max_output_tokens=MAX_OUTPUT_TOKENS,
-                        tools=active_tools,
-                        safety_settings=[
-                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                        ],
-                    )
-
-                    ai_payload = [prompt]
-                    if exemplar_questions.strip():
-                        ai_payload.append(f"\n\n[CLONE EXEMPLARS - TEXT INPUT]:\n{exemplar_questions}")
-                    if has_upload:
-                        photos_list = uploaded_photos if isinstance(uploaded_photos, list) else [uploaded_photos]
-                        for photo in photos_list:
-                            doc_bytes = photo.getvalue()
-                            fname = photo.name.lower()
-                            is_pdf = fname.endswith(".pdf") or (getattr(photo, "type", "") == "application/pdf")
-
-                            if is_pdf:
-                                # 1. Convert PDF pages to JPEG images (compatible with Gemini code_execution)
-                                rendered_any = False
-                                try:
-                                    import pypdfium2 as pdfium
-                                    pdf = pdfium.PdfDocument(doc_bytes)
-                                    for page in pdf:
-                                        pil_image = page.render(scale=2.0).to_pil()
-                                        buf = io.BytesIO()
-                                        pil_image.save(buf, format="JPEG", quality=85)
-                                        ai_payload.append(types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg"))
-                                    rendered_any = True
-                                except Exception:
-                                    pass
-
-                                if not rendered_any:
-                                    try:
-                                        reader = PdfReader(io.BytesIO(doc_bytes))
-                                        for page in reader.pages:
-                                            for img_file in page.images:
-                                                img_name = img_file.name.lower()
-                                                img_mime = "image/png" if img_name.endswith(".png") else "image/jpeg"
-                                                ai_payload.append(types.Part.from_bytes(data=img_file.data, mime_type=img_mime))
-                                                rendered_any = True
-                                    except Exception:
-                                        pass
-
-                                # 2. Extract text if available from PDF
-                                try:
-                                    reader = PdfReader(io.BytesIO(doc_bytes))
-                                    pdf_text = "\n".join([page.extract_text() or "" for page in reader.pages]).strip()
-                                    if pdf_text:
-                                        ai_payload.append(f"\n\n[EXTRACTED PDF TEXT FROM {photo.name}]:\n{pdf_text}")
-                                except Exception:
-                                    pass
-                            else:
-                                # Direct image upload (PNG, JPEG, WEBP)
-                                mime_type = "image/png" if fname.endswith(".png") else ("image/webp" if fname.endswith(".webp") else "image/jpeg")
-                                ai_payload.append(types.Part.from_bytes(data=doc_bytes, mime_type=mime_type))
-
-                        ai_payload.append(
-                            "\n\n[ATTACHED DOCUMENTS INSTRUCTION - HIGHEST PRIORITY]:\n"
-                            "Carefully analyze ALL attached documents/pages:\n"
-                            "1. IF THE ATTACHMENTS ARE AN ASSESSMENT NOTIFICATION, EXAM NOTICE, OR TOPIC LIST (e.g. lists topics, areas assessed, outcomes, syllabus dot points across one or more pages):\n"
-                            "   - You MUST inspect ALL attached pages/images and extract EVERY topic, sub-topic, and skill specified in the notification.\n"
-                            "   - Your generated exam MUST STRICTLY AND EXCLUSIVELY focus on the topics, sub-topics, and syllabus outcomes listed across all uploaded pages. Distribute the requested number of questions across all assessed areas.\n"
-                            "   - DO NOT generate questions on unlisted topics (for example, if the notification covers Probability, Statistics, and Volume, DO NOT generate Algebra, Indices, or Financial Mathematics).\n"
-                            "   - Extract the School Name, Subject, Year Group, and Topic Summary to format the filename in ===FILENAME_START=== tags (e.g. Bonnyrigg_High_School_Maths_Year_9_Probability_Data_Analysis_Volume).\n"
-                            "2. IF THE ATTACHMENTS CONTAIN SAMPLE / EXEMPLAR QUESTIONS OR A WORKSHEET:\n"
-                            "   - Reverse-engineer the mechanics, phrasing, difficulty, and diagram styles of those exact questions, and generate original parallel practice questions testing the same competency."
-                        )
-
-                    models_to_try = [
-                        "gemini-3.8-flash",
-                        "gemini-3.6-flash",
-                        "gemini-2.5-flash",
-                        "gemini-2.0-flash",
-                    ]
-                    last_error = None
-
-                    for model_name in models_to_try:
-                        cur_max_tok = 8192 if ("2.0" in model_name or "2.5" in model_name) else MAX_OUTPUT_TOKENS
-                        # For large batches (>=30 questions), prefer direct LLM generation first to prevent code execution sandbox timeouts
-                        tool_candidates = [[], active_tools] if (total_q >= 30 or not active_tools) else [active_tools, []]
-
-                        for t_list in tool_candidates:
-                            try:
-                                cfg = types.GenerateContentConfig(
-                                    max_output_tokens=cur_max_tok,
-                                    tools=t_list if t_list else None,
-                                    safety_settings=[
-                                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                    ],
-                                )
-                                st.toast(f"🏃 {model_name}: Drafting Questions & Answers...")
-                                p1_payload = ai_payload + [
-                                    "\n\nPHASE 1 INSTRUCTION: You must generate the exam questions AND the answer key. First, generate the questions between ===LATEX_CONTENT_START=== and ===LATEX_CONTENT_END===. Then, immediately generate the short answers between ===LATEX_ANSWERS_START=== and ===LATEX_ANSWERS_END===. Do NOT generate fully worked solutions."
-                                ]
-                                res1 = client.models.generate_content(model=model_name, contents=p1_payload, config=cfg)
-
-                                raw_text = _extract_genai_text(res1)
-                                if not raw_text or "LATEX_CONTENT_START" not in raw_text:
-                                    raise ValueError(f"{model_name} returned incomplete text. Forcing retry...")
-
-                                # Graceful tag auto-completion so output is never thrown away
-                                if "LATEX_CONTENT_END" not in raw_text:
-                                    if "LATEX_ANSWERS_START" in raw_text:
-                                        raw_text = raw_text.replace("===LATEX_ANSWERS_START===", "===LATEX_CONTENT_END===\n===LATEX_ANSWERS_START===")
-                                    else:
-                                        raw_text += "\n===LATEX_CONTENT_END===\n===LATEX_ANSWERS_START===\n===LATEX_ANSWERS_END==="
-
-                                if "LATEX_ANSWERS_START" in raw_text and "LATEX_ANSWERS_END" not in raw_text:
-                                    raw_text += "\n===LATEX_ANSWERS_END==="
-
-                                st.toast(f"✅ Preview Ready! Engine used: {model_name}")
-                                st.session_state.meta_model_used = model_name
-
-                                out = raw_text.replace("```latex", "").replace("```", "")
-
-                                st.session_state.phase_1_raw = out
-                                st.session_state.saved_ai_payload = ai_payload
-
-                                if res1.usage_metadata:
-                                    st.session_state.meta_input_tokens = getattr(res1.usage_metadata, "prompt_token_count", 0)
-                                    st.session_state.meta_output_tokens = getattr(res1.usage_metadata, "candidates_token_count", 0)
-                                else:
-                                    st.session_state.meta_input_tokens = 0
-                                    st.session_state.meta_output_tokens = 0
-
-                                st.session_state.used_search = (subject in live_search_subjects and use_live_search)
-                                break
-                            except Exception as e:
-                                last_error = e
-                                if t_list:
-                                    # First failure might be tool/code-execution crash. Try pure reasoning without tools!
-                                    continue
-                                else:
-                                    if _is_retryable(e):
-                                        st.toast(f"🚦 {model_name} busy. Pivoting to next model...")
-                                        time.sleep(1.5)
-                                    break
-                        if out:
-                            break
-
-                    if not out:
-                        raise last_error
-                    break
-                except Exception as e:
-                    if _is_retryable(e) and attempt < max_retries - 1:
-                        backoff = (attempt + 1) * 3
-                        st.toast(f"AI Hiccup. Retrying automatically in {backoff}s... (Attempt {attempt + 1}/{max_retries})")
-                        time.sleep(backoff)
-                        continue
-                    else:
-                        raise e
-
-            if not out:
-                raise Exception("Failed to generate content after multiple attempts.")
-
-            # ---> DeepSeek-R1 Mathematical & Syllabus Audit Reflection Loop <---
-            if use_deepseek_auditor:
-                active_ds_key = _get_deepseek_api_key()
-                if active_ds_key:
-                    with loading_placeholder.container():
-                        st.markdown(
-                            f"""
-                            <div style="text-align: center; padding: 40px 20px;">
-                                {logo_html}
-                                <h4 style="color: #1A3A8A; margin-top: 20px; font-weight: bold;">🛡️ DeepSeek-R1 Auditing Math & Syllabus...</h4>
-                                <p style="color: #666; font-size: 15px;">Chief Mathematical Auditor is verifying solvability and curriculum boundaries.</p>
-                            </div>
-                            <style>
-                                [data-testid="stStatusWidget"] {{ display: none !important; }}
-                                @keyframes pulse {{
-                                    0% {{ transform: scale(0.95); opacity: 0.6; }}
-                                    50% {{ transform: scale(1.05); opacity: 1; }}
-                                    100% {{ transform: scale(0.95); opacity: 0.6; }}
-                                }}
-                            </style>
-                            """,
-                            unsafe_allow_html=True,
-                        )
-                    st.toast("🛡️ DeepSeek-R1: Auditing math solvability & syllabus compliance...")
-                    audit_res = audit_exam_with_deepseek(
-                        draft_content=out,
-                        subject=subject,
-                        year_group=grades_string,
-                        actual_level=actual_level,
-                        clean_topic=clean_topic,
-                        total_q=total_q,
-                        syllabus_rules=syllabus_ban,
-                        api_key=active_ds_key,
-                    )
-                    st.session_state.deepseek_audit = audit_res
-
-                    if audit_res.get("status") == "REVISION_NEEDED" and audit_res.get("correction_prompt"):
-                        st.toast("⚡ DeepSeek-R1 flagged syllabus/math issues. Gemini is auto-correcting...")
-                        with loading_placeholder.container():
-                            st.markdown(
-                                f"""
-                                <div style="text-align: center; padding: 40px 20px;">
-                                    {logo_html}
-                                    <h4 style="color: #1A3A8A; margin-top: 20px; font-weight: bold;">🔄 Gemini Auto-Correcting Exam...</h4>
-                                    <p style="color: #666; font-size: 15px;">DeepSeek-R1 identified a flaw. Gemini is regenerating corrected questions.</p>
-                                </div>
-                                <style>
-                                    [data-testid="stStatusWidget"] {{ display: none !important; }}
-                                    @keyframes pulse {{
-                                        0% {{ transform: scale(0.95); opacity: 0.6; }}
-                                        50% {{ transform: scale(1.05); opacity: 1; }}
-                                        100% {{ transform: scale(0.95); opacity: 0.6; }}
-                                    }}
-                                </style>
-                                """,
-                                unsafe_allow_html=True,
-                            )
-                        refine_prompt = (
-                            "You previously drafted an exam, but our Chief Mathematical Auditor (DeepSeek-R1) reviewed it and detected the following critical issues:\n\n"
-                            f"AUDITOR'S EVALUATION:\n{audit_res.get('details') or audit_res.get('summary')}\n\n"
-                            f"AUDITOR'S SPECIFIC CORRECTION INSTRUCTIONS:\n{audit_res.get('correction_prompt')}\n\n"
-                            "CRITICAL TASK:\n"
-                            "Regenerate the complete exam, applying the auditor's corrections.\n"
-                            "Keep all already-correct questions untouched, and strictly replace or fix the flagged questions to ensure 100% mathematical accuracy and strict syllabus compliance.\n"
-                            "Output using the exact same format tags:\n"
-                            "===FILENAME_START=== ... ===FILENAME_END===\n"
-                            "===LATEX_CONTENT_START=== ... ===LATEX_CONTENT_END===\n"
-                            "===LATEX_ANSWERS_START=== ... ===LATEX_ANSWERS_END===\n"
-                        )
-                        try:
-                            refine_models = [
-                                st.session_state.meta_model_used or "gemini-3.8-flash",
-                                "gemini-3.6-flash",
-                                "gemini-2.5-flash",
-                            ]
-                            for r_model in refine_models:
-                                cur_ref_tok = 8192 if ("2.0" in r_model or "2.5" in r_model) else MAX_OUTPUT_TOKENS
-                                try:
-                                    ref_cfg = types.GenerateContentConfig(
-                                        max_output_tokens=cur_ref_tok,
-                                        safety_settings=[
-                                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                        ],
-                                    )
-                                    res_refined = client.models.generate_content(
-                                        model=r_model,
-                                        contents=ai_payload + [refine_prompt],
-                                        config=ref_cfg,
-                                    )
-                                    raw_ref = _extract_genai_text(res_refined)
-                                    if raw_ref and "LATEX_CONTENT_START" in raw_ref:
-                                        if "LATEX_CONTENT_END" not in raw_ref:
-                                            if "LATEX_ANSWERS_START" in raw_ref:
-                                                raw_ref = raw_ref.replace("===LATEX_ANSWERS_START===", "===LATEX_CONTENT_END===\n===LATEX_ANSWERS_START===")
-                                            else:
-                                                raw_ref += "\n===LATEX_CONTENT_END===\n===LATEX_ANSWERS_START===\n===LATEX_ANSWERS_END==="
-                                        if "LATEX_ANSWERS_START" in raw_ref and "LATEX_ANSWERS_END" not in raw_ref:
-                                            raw_ref += "\n===LATEX_ANSWERS_END==="
-                                        out = raw_ref.replace("```latex", "").replace("```", "")
-                                        st.session_state.phase_1_raw = out
-                                        audit_res["auto_corrected"] = True
-                                        st.session_state.deepseek_audit = audit_res
-                                        if res_refined.usage_metadata:
-                                            st.session_state.meta_input_tokens += getattr(res_refined.usage_metadata, "prompt_token_count", 0)
-                                            st.session_state.meta_output_tokens += getattr(res_refined.usage_metadata, "candidates_token_count", 0)
-                                        st.toast("✅ Gemini auto-corrected questions based on DeepSeek-R1 feedback!")
-                                        break
-                                except Exception:
-                                    continue
-                        except Exception as e_refine:
-                            _log_error("Gemini self-correction after DeepSeek audit", e_refine)
-                    elif audit_res.get("status") == "APPROVED":
-                        st.toast("🛡️ DeepSeek-R1 Audit: 100% Passed!")
-                else:
-                    st.session_state.deepseek_audit = {
-                        "status": "SKIPPED",
-                        "summary": "DeepSeek auditor skipped: No API key configured.",
-                        "details": "",
-                        "correction_prompt": "",
-                        "reasoning": "",
-                        "auto_corrected": False,
-                    }
+                    logo_b64 = base64.b64encode(open(LOGO_PATH, "rb").read()).decode()
+                    logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="animation: pulse 1.5s infinite ease-in-out; width: 120px; height: auto;" />'
+                except Exception:
+                    logo_html = '<h1 style="font-size: 80px;">✨</h1>'
             else:
-                st.session_state.deepseek_audit = None
+                logo_html = '<h1 style="font-size: 80px;">✨</h1>'
 
-            fn_m = re.search(r"===?\s*FILENAME_START\s*===?(.*?)===?\s*FILENAME_END\s*===?", out, re.DOTALL | re.IGNORECASE)
-            if fn_m and fn_m.group(1).strip():
-                ai_generated_name = re.sub(r"[^A-Za-z0-9_\-\(\) ]", "_", fn_m.group(1).strip())
-                clean_topic = ai_generated_name.replace("_", " ")
-                if set_number_input > 0:
-                    current_set_number = int(set_number_input)
-                else:
-                    current_set_number = get_next_set_number(subject, grades_string, actual_level, clean_topic)
-                display_topic = f"{clean_topic} Set {current_set_number}"
-            else:
-                if set_number_input > 0:
-                    current_set_number = int(set_number_input)
-                else:
-                    current_set_number = get_next_set_number(subject, grades_string, actual_level, clean_topic)
-                display_topic = f"{clean_topic} Set {current_set_number}"
+            loading_placeholder = st.empty()
+            with loading_placeholder.container():
+                st.markdown(
+                    f"""
+                    <div style="text-align: center; padding: 40px 20px;">
+                        {logo_html}
+                        <h4 style="color: #1A3A8A; margin-top: 20px; font-weight: bold;">✨ Drafting Worksheet...</h4>
+                        <p style="color: #666; font-size: 15px;">Fast-compiling questions and short answers for {display_topic}.</p>
+                    </div>
+                    <style>
+                        [data-testid="stStatusWidget"] {{ display: none !important; }}
+                        @keyframes pulse {{
+                            0% {{ transform: scale(0.95); opacity: 0.6; }}
+                            50% {{ transform: scale(1.05); opacity: 1; }}
+                            100% {{ transform: scale(0.95); opacity: 0.6; }}
+                        }}
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
-            c_m = re.search(r"===?\s*LATEX_CONTENT_START\s*===?(.*?)(?:===?\s*LATEX_CONTENT_END\s*===?|===?\s*LATEX_ANSWERS_START|$)", out, re.DOTALL | re.IGNORECASE)
-            a_m = re.search(r"===?\s*LATEX_ANSWERS_START\s*===?(.*?)(?:===?\s*LATEX_ANSWERS_END\s*===?|$)", out, re.DOTALL | re.IGNORECASE)
-
-            q_sanitized = sanitize_ai_latex(c_m.group(1).strip() if c_m else "Failed.")
-            a_sanitized = sanitize_ai_latex(a_m.group(1).strip() if a_m else "Failed.")
-
-            title = f"{grades_string} {subject}{level_text}".strip()
-            work_dir = _start_new_work_dir()
-
-            p_bytes, t_bytes, w_bytes, log, word_reason = _render_exam_files(
-                work_dir, display_topic, title, q_sanitized, a_sanitized, "", total_q
-            )
-
-            st.session_state.update({
-                "questions_text": q_sanitized,
-                "answers_text": a_sanitized,
-                "solutions_text": "",
-                "pdf_bytes": p_bytes,
-                "tex_bytes": t_bytes,
-                "word_bytes": w_bytes,
-                "word_skip_reason": word_reason,
-                "compiler_log": log,
-                "meta_topic": clean_topic,
-                "meta_subject": subject,
-                "meta_year": grades_string,
-                "meta_diff": actual_level,
-                "meta_n": total_q,
-                "meta_set": current_set_number,
-                "display_topic": display_topic,
-                "cloud_saved": False,
-                "saved_exam_id": None,
-                "saved_has_solutions": False,
-                "meta_mc": num_mc,
-                "meta_easy": num_easy,
-                "meta_med": num_med,
-                "meta_hard": num_hard,
-                "meta_xh": num_xh,
-                "meta_extra_instructions": extra_instructions.strip() if extra_instructions else "",
-            })
-
+            res = generate_exam_worker(job_params, progress_cb=lambda msg: st.toast(msg))
             loading_placeholder.empty()
 
-        except Exception as e:
-            loading_placeholder.empty()
-            st.error(f"⚠️ {friendly_error_message(e)}")
-            if total_q >= 35:
-                st.info(f"💡 **Large Batch Tip**: Generating **{total_q} questions** with working out space is a heavy workload for the AI. If Google's servers are experiencing peak traffic, generating in batches of 15–25 questions is much faster and highly reliable.")
-            with st.expander("🛠️ Technical details (for tech support)"):
-                st.code(str(e))
+            if res.get("success"):
+                _load_job_into_session_state(res)
+                st.rerun()
+            else:
+                st.error(f"⚠️ {friendly_error_message(res.get('error'))}")
+                if total_q >= 35:
+                    st.info(f"💡 **Large Batch Tip**: Generating **{total_q} questions** with working out space is a heavy workload for the AI. If Google's servers are experiencing peak traffic, generating in batches of 15–25 questions is much faster and highly reliable.")
+                with st.expander("🛠️ Technical details (for tech support)"):
+                    st.code(str(res.get("raw_error") or res.get("error")))
 
 if st.session_state.questions_text:
     _t, _s, _y, _d, _set, _disp = (
