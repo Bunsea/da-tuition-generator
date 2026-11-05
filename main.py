@@ -1143,7 +1143,8 @@ MAX_OUTPUT_TOKENS = 32768  # Generous budget so larger question sets aren't sile
 _RETRYABLE_MARKERS = (
     "503", "500", "429", "404", "400", "unavailable", "overloaded",
     "internal", "resource_exhausted", "not found", "empty text",
-    "truncated", "invalid_argument",
+    "truncated", "invalid_argument", "timeout", "timed out", "deadline",
+    "connection", "socket", "reset", "busy",
 )
 
 
@@ -1157,15 +1158,15 @@ def friendly_error_message(exc: Exception) -> str:
     msg = str(exc)
     low = msg.lower()
     if "api key" in low or "401" in msg or "permission" in low or "403" in msg:
-        return "The AI service rejected the request — the API key may be missing or invalid. Please contact tech support."
+        return "The AI service rejected the request — the Gemini API key may be missing or invalid. Please check your key in the sidebar."
     if "429" in msg or "resource_exhausted" in low or "quota" in low:
         return "The AI service has temporarily hit its usage limit. Please wait a minute and try again."
-    if "503" in msg or "overloaded" in low or "unavailable" in low or "500" in msg or "internal" in low:
-        return "Google's AI servers are temporarily busy. Please wait a moment and click the button again."
-    if "timeout" in low or "timed out" in low:
-        return "The request took too long and timed out. Try reducing the number of questions and generating again."
+    if "503" in msg or "overloaded" in low or "unavailable" in low or "500" in msg or "internal" in low or "busy" in low:
+        return "Google's AI servers are temporarily busy or overloaded. Please wait a few seconds and click 'It's go time!' again."
+    if "timeout" in low or "timed out" in low or "deadline" in low:
+        return "The request took too long and timed out. This often happens with very large batches (e.g. 40–50 questions). Please try generating again or reduce the question count slightly."
     if "truncated" in low or "empty text" in low:
-        return "The AI's response was incomplete — this usually happens when too many questions are requested at once. Try a smaller batch."
+        return "The AI's response was incomplete — this usually happens when too many questions are requested at once. Try a slightly smaller batch."
     return "Something went wrong while generating the exam. Please try again, or contact tech support if this keeps happening."
 
 
@@ -2117,7 +2118,12 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
             ],
         )
 
-        models_to_try = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash"]
+        models_to_try = [
+            "gemini-3.8-flash",
+            "gemini-3.6-flash",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+        ]
         s_out = None
         for model_name in models_to_try:
             try:
@@ -2129,7 +2135,8 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
                 break
             except Exception as e:
                 if _is_retryable(e):
-                    st.toast(f"🚦 {model_name} busy. Pivoting...")
+                    st.toast(f"🚦 {model_name} busy. Pivoting to next model...")
+                    time.sleep(1.5)
                     continue
                 raise e
 
@@ -2897,7 +2904,12 @@ When instructed, your final combined output must follow this template structure 
                             "   - Reverse-engineer the mechanics, phrasing, difficulty, and diagram styles of those exact questions, and generate original parallel practice questions testing the same competency."
                         )
 
-                    models_to_try = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash"]
+                    models_to_try = [
+                        "gemini-3.8-flash",
+                        "gemini-3.6-flash",
+                        "gemini-2.5-flash",
+                        "gemini-2.0-flash",
+                    ]
                     last_error = None
 
                     for model_name in models_to_try:
@@ -2931,7 +2943,8 @@ When instructed, your final combined output must follow this template structure 
                         except Exception as e:
                             last_error = e
                             if _is_retryable(e):
-                                st.toast(f"🚦 {model_name} unavailable. Pivoting to next model...")
+                                st.toast(f"🚦 {model_name} busy. Pivoting to next model...")
+                                time.sleep(1.5)
                                 continue
                             else:
                                 raise e
@@ -2941,8 +2954,9 @@ When instructed, your final combined output must follow this template structure 
                     break
                 except Exception as e:
                     if _is_retryable(e) and attempt < max_retries - 1:
-                        st.toast(f"AI Hiccup. Retrying automatically... (Attempt {attempt + 1}/{max_retries})")
-                        time.sleep(3)
+                        backoff = (attempt + 1) * 3
+                        st.toast(f"AI Hiccup. Retrying automatically in {backoff}s... (Attempt {attempt + 1}/{max_retries})")
+                        time.sleep(backoff)
                         continue
                     else:
                         raise e
@@ -3020,11 +3034,24 @@ When instructed, your final combined output must follow this template structure 
                             "===LATEX_ANSWERS_START=== ... ===LATEX_ANSWERS_END===\n"
                         )
                         try:
-                            res_refined = client.models.generate_content(
-                                model=st.session_state.meta_model_used or "gemini-3.8-flash",
-                                contents=ai_payload + [refine_prompt],
-                                config=gen_config,
-                            )
+                            refine_models = [
+                                st.session_state.meta_model_used or "gemini-3.8-flash",
+                                "gemini-3.6-flash",
+                                "gemini-2.5-flash",
+                            ]
+                            res_refined = None
+                            for r_model in refine_models:
+                                try:
+                                    res_refined = client.models.generate_content(
+                                        model=r_model,
+                                        contents=ai_payload + [refine_prompt],
+                                        config=gen_config,
+                                    )
+                                    if res_refined and res_refined.text and "LATEX_ANSWERS_END" in res_refined.text:
+                                        break
+                                except Exception:
+                                    continue
+
                             if res_refined and res_refined.text and "LATEX_ANSWERS_END" in res_refined.text:
                                 out = res_refined.text.replace("```latex", "").replace("```", "")
                                 st.session_state.phase_1_raw = out
@@ -3111,6 +3138,8 @@ When instructed, your final combined output must follow this template structure 
         except Exception as e:
             loading_placeholder.empty()
             st.error(f"⚠️ {friendly_error_message(e)}")
+            if total_q >= 35:
+                st.info(f"💡 **Large Batch Tip**: Generating **{total_q} questions** with working out space is a heavy workload for the AI. If Google's servers are experiencing peak traffic, generating in batches of 15–25 questions is much faster and highly reliable.")
             with st.expander("🛠️ Technical details (for tech support)"):
                 st.code(str(e))
 
@@ -3201,7 +3230,7 @@ if st.session_state.questions_text:
     model_used = st.session_state.meta_model_used or "Unknown"
 
     model_lower = model_used.lower()
-    if "3.7-flash" in model_lower or "3.8-flash" in model_lower:
+    if "3.8-flash" in model_lower or "3.7-flash" in model_lower or "3.6-flash" in model_lower:
         in_cost = (in_tok / 1_000_000) * 0.75
         out_cost = (out_tok / 1_000_000) * 3.75
     elif "flash-lite" in model_lower:
@@ -3253,7 +3282,12 @@ if st.session_state.questions_text:
                         "\n\nPHASE 2 INSTRUCTION: Excellent. Now, generate the step-by-step fully worked solutions for these EXACT questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===. Group trivial algebra. Show all key mathematical steps. Never use \\tag inside $$ ... $$ or \\[ ... \\]; use \\qquad (1) if numbering equations.",
                     ]
 
-                    models_to_try = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash"]
+                    models_to_try = [
+                        "gemini-3.8-flash",
+                        "gemini-3.6-flash",
+                        "gemini-2.5-flash",
+                        "gemini-2.0-flash",
+                    ]
                     s_out = None
                     last_error = None
                     for model_name in models_to_try:
@@ -3274,6 +3308,7 @@ if st.session_state.questions_text:
                             last_error = e
                             if _is_retryable(e):
                                 st.toast(f"🚦 {model_name} busy. Pivoting...")
+                                time.sleep(1.5)
                                 continue
                             else:
                                 raise e
