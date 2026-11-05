@@ -1170,6 +1170,30 @@ def friendly_error_message(exc: Exception) -> str:
     return "Something went wrong while generating the exam. Please try again, or contact tech support if this keeps happening."
 
 
+def _extract_genai_text(res) -> str:
+    """Extracts text from a Gemini response, safely handling multi-part content (e.g. tool execution results)."""
+    if not res:
+        return ""
+    try:
+        t = getattr(res, "text", None)
+        if t:
+            return t
+    except Exception:
+        pass
+    parts_text = []
+    candidates = getattr(res, "candidates", []) or []
+    for cand in candidates:
+        content = getattr(cand, "content", None)
+        if content and getattr(content, "parts", None):
+            for part in content.parts:
+                if getattr(part, "thought", False):
+                    continue
+                txt = getattr(part, "text", None)
+                if txt:
+                    parts_text.append(txt)
+    return "".join(parts_text)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TEACHER ACCOUNTS & AUTHENTICATION MODULE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2125,20 +2149,41 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
             "gemini-2.0-flash",
         ]
         s_out = None
+        q_count = int(exam.get("total_questions") or 0)
         for model_name in models_to_try:
-            try:
-                st.toast(f"🧠 {model_name}: Solving equations...")
-                res = client.models.generate_content(model=model_name, contents=[sol_prompt], config=gen_config)
-                if not res or not res.text or "LATEX_SOLUTIONS_END" not in res.text:
-                    raise ValueError("Solutions truncated. Retrying...")
-                s_out = res.text.replace("```latex", "").replace("```", "")
+            cur_max = 8192 if ("2.0" in model_name or "2.5" in model_name) else MAX_OUTPUT_TOKENS
+            tool_candidates = [[], [types.Tool(code_execution=types.ToolCodeExecution())]] if q_count >= 30 else [[types.Tool(code_execution=types.ToolCodeExecution())], []]
+            for t_list in tool_candidates:
+                try:
+                    cfg = types.GenerateContentConfig(
+                        max_output_tokens=cur_max,
+                        tools=t_list if t_list else None,
+                        safety_settings=[
+                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                        ],
+                    )
+                    st.toast(f"🧠 {model_name}: Solving equations...")
+                    res = client.models.generate_content(model=model_name, contents=[sol_prompt], config=cfg)
+                    raw_s = _extract_genai_text(res)
+                    if not raw_s or "LATEX_SOLUTIONS_START" not in raw_s:
+                        raise ValueError("Solutions truncated. Retrying...")
+                    if "LATEX_SOLUTIONS_END" not in raw_s:
+                        raw_s += "\n===LATEX_SOLUTIONS_END==="
+                    s_out = raw_s.replace("```latex", "").replace("```", "")
+                    break
+                except Exception as e:
+                    if t_list:
+                        continue
+                    if _is_retryable(e):
+                        st.toast(f"🚦 {model_name} busy. Pivoting to next model...")
+                        time.sleep(1.5)
+                        break
+                    raise e
+            if s_out:
                 break
-            except Exception as e:
-                if _is_retryable(e):
-                    st.toast(f"🚦 {model_name} busy. Pivoting to next model...")
-                    time.sleep(1.5)
-                    continue
-                raise e
 
         if not s_out:
             return False, "All AI models failed to generate solutions. Please try again later."
@@ -2913,41 +2958,71 @@ When instructed, your final combined output must follow this template structure 
                     last_error = None
 
                     for model_name in models_to_try:
-                        try:
-                            st.toast(f"🏃 {model_name}: Drafting Questions & Answers...")
-                            p1_payload = ai_payload + [
-                                "\n\nPHASE 1 INSTRUCTION: You must generate the exam questions AND the answer key. First, generate the questions between ===LATEX_CONTENT_START=== and ===LATEX_CONTENT_END===. Then, immediately generate the short answers between ===LATEX_ANSWERS_START=== and ===LATEX_ANSWERS_END===. Do NOT generate fully worked solutions."
-                            ]
-                            res1 = client.models.generate_content(model=model_name, contents=p1_payload, config=gen_config)
+                        cur_max_tok = 8192 if ("2.0" in model_name or "2.5" in model_name) else MAX_OUTPUT_TOKENS
+                        # For large batches (>=30 questions), prefer direct LLM generation first to prevent code execution sandbox timeouts
+                        tool_candidates = [[], active_tools] if (total_q >= 30 or not active_tools) else [active_tools, []]
 
-                            if not res1 or not res1.text or "LATEX_ANSWERS_END" not in res1.text:
-                                raise ValueError("Phase 1 returned truncated or empty text. Forcing retry...")
+                        for t_list in tool_candidates:
+                            try:
+                                cfg = types.GenerateContentConfig(
+                                    max_output_tokens=cur_max_tok,
+                                    tools=t_list if t_list else None,
+                                    safety_settings=[
+                                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                    ],
+                                )
+                                st.toast(f"🏃 {model_name}: Drafting Questions & Answers...")
+                                p1_payload = ai_payload + [
+                                    "\n\nPHASE 1 INSTRUCTION: You must generate the exam questions AND the answer key. First, generate the questions between ===LATEX_CONTENT_START=== and ===LATEX_CONTENT_END===. Then, immediately generate the short answers between ===LATEX_ANSWERS_START=== and ===LATEX_ANSWERS_END===. Do NOT generate fully worked solutions."
+                                ]
+                                res1 = client.models.generate_content(model=model_name, contents=p1_payload, config=cfg)
 
-                            st.toast(f"✅ Preview Ready! Engine used: {model_name}")
-                            st.session_state.meta_model_used = model_name
+                                raw_text = _extract_genai_text(res1)
+                                if not raw_text or "LATEX_CONTENT_START" not in raw_text:
+                                    raise ValueError(f"{model_name} returned incomplete text. Forcing retry...")
 
-                            out = res1.text.replace("```latex", "").replace("```", "")
+                                # Graceful tag auto-completion so output is never thrown away
+                                if "LATEX_CONTENT_END" not in raw_text:
+                                    if "LATEX_ANSWERS_START" in raw_text:
+                                        raw_text = raw_text.replace("===LATEX_ANSWERS_START===", "===LATEX_CONTENT_END===\n===LATEX_ANSWERS_START===")
+                                    else:
+                                        raw_text += "\n===LATEX_CONTENT_END===\n===LATEX_ANSWERS_START===\n===LATEX_ANSWERS_END==="
 
-                            st.session_state.phase_1_raw = out
-                            st.session_state.saved_ai_payload = ai_payload
+                                if "LATEX_ANSWERS_START" in raw_text and "LATEX_ANSWERS_END" not in raw_text:
+                                    raw_text += "\n===LATEX_ANSWERS_END==="
 
-                            if res1.usage_metadata:
-                                st.session_state.meta_input_tokens = getattr(res1.usage_metadata, "prompt_token_count", 0)
-                                st.session_state.meta_output_tokens = getattr(res1.usage_metadata, "candidates_token_count", 0)
-                            else:
-                                st.session_state.meta_input_tokens = 0
-                                st.session_state.meta_output_tokens = 0
+                                st.toast(f"✅ Preview Ready! Engine used: {model_name}")
+                                st.session_state.meta_model_used = model_name
 
-                            st.session_state.used_search = (subject in live_search_subjects and use_live_search)
+                                out = raw_text.replace("```latex", "").replace("```", "")
+
+                                st.session_state.phase_1_raw = out
+                                st.session_state.saved_ai_payload = ai_payload
+
+                                if res1.usage_metadata:
+                                    st.session_state.meta_input_tokens = getattr(res1.usage_metadata, "prompt_token_count", 0)
+                                    st.session_state.meta_output_tokens = getattr(res1.usage_metadata, "candidates_token_count", 0)
+                                else:
+                                    st.session_state.meta_input_tokens = 0
+                                    st.session_state.meta_output_tokens = 0
+
+                                st.session_state.used_search = (subject in live_search_subjects and use_live_search)
+                                break
+                            except Exception as e:
+                                last_error = e
+                                if t_list:
+                                    # First failure might be tool/code-execution crash. Try pure reasoning without tools!
+                                    continue
+                                else:
+                                    if _is_retryable(e):
+                                        st.toast(f"🚦 {model_name} busy. Pivoting to next model...")
+                                        time.sleep(1.5)
+                                    break
+                        if out:
                             break
-                        except Exception as e:
-                            last_error = e
-                            if _is_retryable(e):
-                                st.toast(f"🚦 {model_name} busy. Pivoting to next model...")
-                                time.sleep(1.5)
-                                continue
-                            else:
-                                raise e
 
                     if not out:
                         raise last_error
@@ -3039,28 +3114,43 @@ When instructed, your final combined output must follow this template structure 
                                 "gemini-3.6-flash",
                                 "gemini-2.5-flash",
                             ]
-                            res_refined = None
                             for r_model in refine_models:
+                                cur_ref_tok = 8192 if ("2.0" in r_model or "2.5" in r_model) else MAX_OUTPUT_TOKENS
                                 try:
+                                    ref_cfg = types.GenerateContentConfig(
+                                        max_output_tokens=cur_ref_tok,
+                                        safety_settings=[
+                                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                        ],
+                                    )
                                     res_refined = client.models.generate_content(
                                         model=r_model,
                                         contents=ai_payload + [refine_prompt],
-                                        config=gen_config,
+                                        config=ref_cfg,
                                     )
-                                    if res_refined and res_refined.text and "LATEX_ANSWERS_END" in res_refined.text:
+                                    raw_ref = _extract_genai_text(res_refined)
+                                    if raw_ref and "LATEX_CONTENT_START" in raw_ref:
+                                        if "LATEX_CONTENT_END" not in raw_ref:
+                                            if "LATEX_ANSWERS_START" in raw_ref:
+                                                raw_ref = raw_ref.replace("===LATEX_ANSWERS_START===", "===LATEX_CONTENT_END===\n===LATEX_ANSWERS_START===")
+                                            else:
+                                                raw_ref += "\n===LATEX_CONTENT_END===\n===LATEX_ANSWERS_START===\n===LATEX_ANSWERS_END==="
+                                        if "LATEX_ANSWERS_START" in raw_ref and "LATEX_ANSWERS_END" not in raw_ref:
+                                            raw_ref += "\n===LATEX_ANSWERS_END==="
+                                        out = raw_ref.replace("```latex", "").replace("```", "")
+                                        st.session_state.phase_1_raw = out
+                                        audit_res["auto_corrected"] = True
+                                        st.session_state.deepseek_audit = audit_res
+                                        if res_refined.usage_metadata:
+                                            st.session_state.meta_input_tokens += getattr(res_refined.usage_metadata, "prompt_token_count", 0)
+                                            st.session_state.meta_output_tokens += getattr(res_refined.usage_metadata, "candidates_token_count", 0)
+                                        st.toast("✅ Gemini auto-corrected questions based on DeepSeek-R1 feedback!")
                                         break
                                 except Exception:
                                     continue
-
-                            if res_refined and res_refined.text and "LATEX_ANSWERS_END" in res_refined.text:
-                                out = res_refined.text.replace("```latex", "").replace("```", "")
-                                st.session_state.phase_1_raw = out
-                                audit_res["auto_corrected"] = True
-                                st.session_state.deepseek_audit = audit_res
-                                if res_refined.usage_metadata:
-                                    st.session_state.meta_input_tokens += getattr(res_refined.usage_metadata, "prompt_token_count", 0)
-                                    st.session_state.meta_output_tokens += getattr(res_refined.usage_metadata, "candidates_token_count", 0)
-                                st.toast("✅ Gemini auto-corrected questions based on DeepSeek-R1 feedback!")
                         except Exception as e_refine:
                             _log_error("Gemini self-correction after DeepSeek audit", e_refine)
                     elif audit_res.get("status") == "APPROVED":
@@ -3291,27 +3381,49 @@ if st.session_state.questions_text:
                     s_out = None
                     last_error = None
                     for model_name in models_to_try:
-                        try:
-                            st.toast(f"🧠 {model_name}: Solving equations...")
-                            res2 = client.models.generate_content(model=model_name, contents=p2_payload, config=gen_config)
+                        cur_max_tok = 8192 if ("2.0" in model_name or "2.5" in model_name) else MAX_OUTPUT_TOKENS
+                        # For large batches (>=30 questions), prefer direct LLM generation first to prevent code execution sandbox timeouts
+                        tool_candidates = [[], active_tools] if (total_q >= 30 or not active_tools) else [active_tools, []]
 
-                            if not res2 or not res2.text or "LATEX_SOLUTIONS_END" not in res2.text:
-                                raise ValueError("Solutions truncated. Retrying...")
+                        for t_list in tool_candidates:
+                            try:
+                                cfg = types.GenerateContentConfig(
+                                    max_output_tokens=cur_max_tok,
+                                    tools=t_list if t_list else None,
+                                    safety_settings=[
+                                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+                                    ],
+                                )
+                                st.toast(f"🧠 {model_name}: Solving equations...")
+                                res2 = client.models.generate_content(model=model_name, contents=p2_payload, config=cfg)
 
-                            s_out = res2.text.replace("```latex", "").replace("```", "")
+                                raw_s = _extract_genai_text(res2)
+                                if not raw_s or "LATEX_SOLUTIONS_START" not in raw_s:
+                                    raise ValueError("Solutions truncated. Retrying...")
 
-                            if res2.usage_metadata:
-                                st.session_state.meta_input_tokens += getattr(res2.usage_metadata, "prompt_token_count", 0)
-                                st.session_state.meta_output_tokens += getattr(res2.usage_metadata, "candidates_token_count", 0)
+                                if "LATEX_SOLUTIONS_END" not in raw_s:
+                                    raw_s += "\n===LATEX_SOLUTIONS_END==="
+
+                                s_out = raw_s.replace("```latex", "").replace("```", "")
+
+                                if res2.usage_metadata:
+                                    st.session_state.meta_input_tokens += getattr(res2.usage_metadata, "prompt_token_count", 0)
+                                    st.session_state.meta_output_tokens += getattr(res2.usage_metadata, "candidates_token_count", 0)
+                                break
+                            except Exception as e:
+                                last_error = e
+                                if t_list:
+                                    continue
+                                else:
+                                    if _is_retryable(e):
+                                        st.toast(f"🚦 {model_name} busy. Pivoting...")
+                                        time.sleep(1.5)
+                                    break
+                        if s_out:
                             break
-                        except Exception as e:
-                            last_error = e
-                            if _is_retryable(e):
-                                st.toast(f"🚦 {model_name} busy. Pivoting...")
-                                time.sleep(1.5)
-                                continue
-                            else:
-                                raise e
 
                     if s_out:
                         s_m = re.search(r"===?\s*LATEX_SOLUTIONS_START\s*===?(.*?)(?:===?\s*LATEX_SOLUTIONS_END\s*===?|$)", s_out, re.DOTALL | re.IGNORECASE)
