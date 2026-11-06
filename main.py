@@ -127,12 +127,12 @@ supabase_client = init_supabase()
 
 
 
-def get_next_set_number(subject, year, diff, clean_topic):
+def get_existing_set_numbers(subject, year, diff, clean_topic) -> set:
+    """Queries all existing set numbers for a topic from Supabase."""
     if not supabase_client:
-        return 1
+        return set()
+    found_sets = set()
     try:
-        found_sets = set()
-
         # 1. Direct match on clean_topic prefix with year scoping
         query = (
             supabase_client.table("saved_exams")
@@ -166,15 +166,18 @@ def get_next_set_number(subject, year, diff, clean_topic):
                     m = re.search(r"\bSet\s*(\d+)\b", t, re.IGNORECASE)
                     if m:
                         found_sets.add(int(m.group(1)))
-
-        # Find the lowest available positive integer (re-uses deleted/missing set slots starting at Set 1)
-        k = 1
-        while k in found_sets:
-            k += 1
-        return k
     except Exception as e:
-        _log_error("get_next_set_number", e)
-        return 1
+        _log_error("get_existing_set_numbers", e)
+    return found_sets
+
+
+def get_next_set_number(subject, year, diff, clean_topic):
+    found_sets = get_existing_set_numbers(subject, year, diff, clean_topic)
+    # Find the lowest available positive integer (re-uses deleted/missing set slots starting at Set 1)
+    k = 1
+    while k in found_sets:
+        k += 1
+    return k
 
 
 def save_to_supabase(
@@ -1509,15 +1512,14 @@ def audit_exam_with_deepseek(
 # ══════════════════════════════════════════════════════════════════════════════
 GLOBAL_JOB_QUEUE: dict[str, dict] = {}
 GLOBAL_QUEUE_LOCK = threading.Lock()
-GLOBAL_JOB_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="DA_ExamWorker")
+GLOBAL_JOB_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="DA_ExamWorker")
 
 
 def get_next_set_number_with_queue(subject: str, year: str, diff: str, topic: str, base_set: int = 0) -> int:
     """Calculates the next available set number considering both Supabase and currently queued/running jobs."""
     if base_set > 0:
         return base_set
-    db_set = get_next_set_number(subject, year, diff, topic)
-    occupied = {db_set}
+    occupied = set(get_existing_set_numbers(subject, year, diff, topic))
     with GLOBAL_QUEUE_LOCK:
         for j in GLOBAL_JOB_QUEUE.values():
             if j.get("status") in ("QUEUED", "RUNNING", "COMPLETED"):
@@ -2268,45 +2270,61 @@ def _load_job_into_session_state(res: dict):
 
 def render_exam_queue_dashboard():
     """Renders active, queued, and completed background generation jobs."""
-    queued_ids = st.session_state.get("my_queued_job_ids", [])
-    valid_jobs = []
-    if queued_ids:
-        with GLOBAL_QUEUE_LOCK:
-            valid_jobs = [GLOBAL_JOB_QUEUE[jid] for jid in queued_ids if jid in GLOBAL_JOB_QUEUE]
+    with GLOBAL_QUEUE_LOCK:
+        active_jobs = [j for j in GLOBAL_JOB_QUEUE.values() if j.get("status") in ("QUEUED", "RUNNING")]
+        done_jobs = [j for j in GLOBAL_JOB_QUEUE.values() if j.get("status") in ("COMPLETED", "FAILED")]
+
+    done_jobs.sort(key=lambda x: x.get("created_at", datetime.min), reverse=True)
+    valid_jobs = active_jobs + done_jobs[:15]
 
     if not valid_jobs:
         st.markdown("---")
-        with st.expander("📋 Active Exam Generation Queue (0 active)", expanded=False):
-            st.info(
-                "💡 **No exams currently in the queue.**\n\n"
-                "To generate exams in the background without waiting:\n"
-                "1. Choose your Year, Subject, Topic, and Questions above.\n"
-                "2. Click the red **`🚀 Add to Generation Queue`** button.\n"
-                "3. Your exam will start generating right here. You can immediately configure and queue additional exams in parallel!"
-            )
+        try:
+            empty_container = st.container(border=True)
+        except TypeError:
+            empty_container = st.container()
+        with empty_container:
+            st.markdown("### 📋 Active Exam Generation Queue (Idle)")
+            st.caption("No exams currently in the queue. Click **✨ Generate Exam** above to generate exams in the background. You can queue multiple exams back-to-back without waiting!")
         return
 
     st.markdown("---")
+    n_running = sum(1 for j in active_jobs if j.get("status") == "RUNNING")
+    n_queued = sum(1 for j in active_jobs if j.get("status") == "QUEUED")
+    n_done = sum(1 for j in done_jobs if j.get("status") == "COMPLETED")
+
+    badges = []
+    if n_running:
+        badges.append(f"{n_running} Generating")
+    if n_queued:
+        badges.append(f"{n_queued} Queued")
+    if n_done:
+        badges.append(f"{n_done} Ready")
+    summary_str = " · ".join(badges) if badges else f"{len(valid_jobs)} Exams"
+
     q_head_c1, q_head_c2, q_head_c3 = st.columns([3, 1, 1], vertical_alignment="center")
     with q_head_c1:
-        st.markdown(f"### 📋 Active Exam Generation Queue ({len(valid_jobs)})")
+        st.markdown(f"### 📋 Active Exam Generation Queue ({summary_str})")
     with q_head_c2:
         if st.button("🔄 Refresh Status", key="btn_refresh_q", help="Refresh progress of background jobs"):
             st.rerun()
     with q_head_c3:
         if st.button("🗑️ Clear Done", key="btn_clear_done_q", help="Clear completed or failed jobs from this list"):
-            done_ids = {j["id"] for j in valid_jobs if j.get("status") in ("COMPLETED", "FAILED")}
-            st.session_state["my_queued_job_ids"] = [jid for jid in queued_ids if jid not in done_ids]
+            with GLOBAL_QUEUE_LOCK:
+                for j in done_jobs:
+                    if j["id"] in GLOBAL_JOB_QUEUE:
+                        del GLOBAL_JOB_QUEUE[j["id"]]
             st.rerun()
 
-    for job in valid_jobs:
+    for idx, job in enumerate(valid_jobs):
         jid = job["id"]
         status = job.get("status", "QUEUED")
         title = job.get("title", "Exam")
         total_q = job.get("total_q", 0)
         progress = job.get("progress", "")
         lvl = f" {job['level']}" if job.get("level") else ""
-        meta_line = f"{job.get('year', '')}{lvl} · {job.get('subject', '')} · {total_q} Questions"
+        creator = job.get("created_by") or "Teacher"
+        meta_line = f"{job.get('year', '')}{lvl} · {job.get('subject', '')} · {total_q} Questions · 👤 {creator}"
         if job.get("auto_solutions"):
             meta_line += " · 🧠 With Solutions"
 
@@ -2317,7 +2335,7 @@ def render_exam_queue_dashboard():
         with card_container:
             c_top1, c_top2 = st.columns([4, 2], vertical_alignment="center")
             with c_top1:
-                st.markdown(f"**{title}**")
+                st.markdown(f"**#{idx + 1}. {title}**")
                 st.caption(meta_line)
             with c_top2:
                 if status == "RUNNING":
@@ -2338,7 +2356,7 @@ def render_exam_queue_dashboard():
                 res = job.get("result", {})
                 b1, b2, b3 = st.columns([2, 2, 2])
                 with b1:
-                    if st.button("👁️ Load to Preview", key=f"q_view_{jid}", use_container_width=True):
+                    if st.button("👁️ Load to Preview", key=f"q_view_{jid}", type="primary", use_container_width=True):
                         _load_job_into_session_state(res)
                         st.toast(f"✅ Loaded {title} into Preview below!")
                         st.rerun()
@@ -2383,14 +2401,11 @@ def render_exam_queue_dashboard():
 
 def render_exam_queue_section():
     """Wrapper that enables live 3-second auto-refresh if jobs are actively processing."""
-    queued_ids = st.session_state.get("my_queued_job_ids", [])
-    has_running = False
-    if queued_ids:
-        with GLOBAL_QUEUE_LOCK:
-            has_running = any(
-                GLOBAL_JOB_QUEUE.get(jid, {}).get("status") in ("RUNNING", "QUEUED")
-                for jid in queued_ids
-            )
+    with GLOBAL_QUEUE_LOCK:
+        has_running = any(
+            j.get("status") in ("RUNNING", "QUEUED")
+            for j in GLOBAL_JOB_QUEUE.values()
+        )
 
     if has_running and hasattr(st, "fragment"):
         @st.fragment(run_every="3s")
@@ -3290,6 +3305,39 @@ if app_mode == "📚 Exam Library":
                                     with st.expander("🛠️ Technical details"):
                                         st.code(str(e))
 
+                        # --- SET NUMBER EDIT SECTION ---
+                        m_set = re.search(r"\bSet\s*(\d+)\b", exam.get("topic", ""), re.IGNORECASE)
+                        cur_set = int(m_set.group(1)) if m_set else 1
+
+                        st.markdown("---")
+                        set_col1, set_col2 = st.columns([2, 3], vertical_alignment="bottom")
+                        with set_col1:
+                            new_set_val = st.number_input(
+                                "Change Set #",
+                                min_value=1,
+                                max_value=999,
+                                value=cur_set,
+                                key=f"edit_set_{exam['id']}",
+                                help="Change the set number for this saved exam in the library",
+                            )
+                        with set_col2:
+                            if st.button("💾 Update Set #", key=f"btn_save_set_{exam['id']}"):
+                                if new_set_val != cur_set:
+                                    old_topic = exam.get("topic", "")
+                                    if m_set:
+                                        updated_topic = re.sub(r"\bSet\s*\d+\b", f"Set {new_set_val}", old_topic, count=1, flags=re.IGNORECASE)
+                                    else:
+                                        updated_topic = f"{old_topic} Set {new_set_val}"
+                                    try:
+                                        supabase_client.table("saved_exams").update({"topic": updated_topic}).eq("id", exam["id"]).execute()
+                                        st.toast(f"✅ Set number updated to Set {new_set_val}!")
+                                        time.sleep(0.5)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Failed to update set number: {e}")
+                                else:
+                                    st.info(f"Exam is already Set {cur_set}.")
+
                         # --- EXTRA INSTRUCTIONS SECTION ---
                         instr_text = get_exam_instructions(
                             exam.get("pdf_url", ""),
@@ -3481,22 +3529,15 @@ with c_opt1:
         help="If checked, the AI will also calculate and compile fully worked solutions into the document automatically.",
     )
 
-btn_col1, btn_col2, btn_col3 = st.columns([3, 2, 1])
+btn_col1, btn_col2 = st.columns([5, 1])
 with btn_col1:
-    queue_btn = st.button(
-        "🚀 Add to Generation Queue",
+    generate_btn = st.button(
+        "✨ Generate Exam",
         type="primary",
         use_container_width=True,
-        help="Queue this exam to generate in the background so you can start configuring your next exam immediately without waiting!",
+        help="Submits this exam to the background generation queue so you can configure and generate multiple exams back-to-back without waiting!",
     )
 with btn_col2:
-    generate_now_btn = st.button(
-        "⚡ Generate Now (Wait)",
-        type="secondary",
-        use_container_width=True,
-        help="Generate immediately on this screen with live progress.",
-    )
-with btn_col3:
     if st.button("🗑 Clear", use_container_width=True):
         _old_wd = st.session_state.get("work_dir")
         if _old_wd and os.path.isdir(_old_wd):
@@ -3511,7 +3552,7 @@ with btn_col3:
 # ── BACKGROUND GENERATION QUEUE MONITOR ────────────────────────────────────────
 render_exam_queue_section()
 
-if queue_btn or generate_now_btn:
+if generate_btn:
     is_topic_empty = not topic or (isinstance(topic, str) and not topic.strip())
     has_upload = bool(uploaded_photos) if isinstance(uploaded_photos, list) else (uploaded_photos is not None)
     if not year_group:
@@ -3584,55 +3625,10 @@ if queue_btn or generate_now_btn:
             "created_by": st.session_state.get("user_display_name", "Teacher"),
         }
 
-        if queue_btn:
-            job_id = submit_exam_job(job_params, teacher_username=st.session_state.get("username", ""))
-            st.session_state.setdefault("my_queued_job_ids", []).append(job_id)
-            st.toast(f"🚀 Queued: {display_topic}! Generating in background. You can now configure another exam.")
-            st.rerun()
-        elif generate_now_btn:
-            logo_html = ""
-            if os.path.exists(LOGO_PATH):
-                try:
-                    logo_b64 = base64.b64encode(open(LOGO_PATH, "rb").read()).decode()
-                    logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="animation: pulse 1.5s infinite ease-in-out; width: 120px; height: auto;" />'
-                except Exception:
-                    logo_html = '<h1 style="font-size: 80px;">✨</h1>'
-            else:
-                logo_html = '<h1 style="font-size: 80px;">✨</h1>'
-
-            loading_placeholder = st.empty()
-            with loading_placeholder.container():
-                st.markdown(
-                    f"""
-                    <div style="text-align: center; padding: 40px 20px;">
-                        {logo_html}
-                        <h4 style="color: #1A3A8A; margin-top: 20px; font-weight: bold;">✨ Drafting Worksheet...</h4>
-                        <p style="color: #666; font-size: 15px;">Fast-compiling questions and short answers for {display_topic}.</p>
-                    </div>
-                    <style>
-                        [data-testid="stStatusWidget"] {{ display: none !important; }}
-                        @keyframes pulse {{
-                            0% {{ transform: scale(0.95); opacity: 0.6; }}
-                            50% {{ transform: scale(1.05); opacity: 1; }}
-                            100% {{ transform: scale(0.95); opacity: 0.6; }}
-                        }}
-                    </style>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-            res = generate_exam_worker(job_params, progress_cb=lambda msg: st.toast(msg))
-            loading_placeholder.empty()
-
-            if res.get("success"):
-                _load_job_into_session_state(res)
-                st.rerun()
-            else:
-                st.error(f"⚠️ {friendly_error_message(res.get('error'))}")
-                if total_q >= 35:
-                    st.info(f"💡 **Large Batch Tip**: Generating **{total_q} questions** with working out space is a heavy workload for the AI. If Google's servers are experiencing peak traffic, generating in batches of 15–25 questions is much faster and highly reliable.")
-                with st.expander("🛠️ Technical details (for tech support)"):
-                    st.code(str(res.get("raw_error") or res.get("error")))
+        job_id = submit_exam_job(job_params, teacher_username=st.session_state.get("username", ""))
+        st.session_state.setdefault("my_queued_job_ids", []).append(job_id)
+        st.toast(f"🚀 Queued: {display_topic}! Generating in background. You can now configure another exam.")
+        st.rerun()
 
 if st.session_state.questions_text:
     _t, _s, _y, _d, _set, _disp = (
