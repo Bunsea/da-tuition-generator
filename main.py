@@ -46,6 +46,26 @@ else:
         return dt_sydney.strftime("%d %b %Y, %I:%M %p")
 
 
+def format_job_sydney_time(dt):
+    if not dt:
+        return ""
+    if isinstance(dt, datetime):
+        try:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            try:
+                from zoneinfo import ZoneInfo
+                syd_tz = ZoneInfo("Australia/Sydney")
+            except Exception:
+                import pytz
+                syd_tz = pytz.timezone("Australia/Sydney")
+            syd_dt = dt.astimezone(syd_tz)
+            return syd_dt.strftime("%I:%M %p")
+        except Exception:
+            return dt.strftime("%I:%M %p")
+    return str(dt)
+
+
 import numpy as np
 import matplotlib
 
@@ -2179,7 +2199,7 @@ def submit_exam_job(params: dict, teacher_username: str = "") -> str:
             "total_q": params.get("total_q", 0),
             "meta_set": params.get("current_set_number", 1),
             "auto_solutions": params.get("auto_solutions", False),
-            "created_at": datetime.now(),
+            "created_at": datetime.now(timezone.utc),
             "created_by": params.get("created_by", "Teacher"),
             "username": teacher_username,
             "status": "QUEUED",  # QUEUED, RUNNING, COMPLETED, FAILED
@@ -2333,7 +2353,11 @@ def render_exam_queue_dashboard():
         progress = job.get("progress", "")
         lvl = f" {job['level']}" if job.get("level") else ""
         creator = job.get("created_by") or "Teacher"
-        meta_line = f"{job.get('year', '')}{lvl} · {job.get('subject', '')} · {total_q} Questions · 👤 {creator}"
+        time_str = format_job_sydney_time(job.get("created_at"))
+        meta_line = f"{job.get('year', '')}{lvl} · {job.get('subject', '')} · {total_q} Questions"
+        if time_str:
+            meta_line += f" · 🕒 {time_str}"
+        meta_line += f" · 👤 {creator}"
         if job.get("auto_solutions"):
             meta_line += " · 🧠 With Solutions"
 
