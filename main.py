@@ -1510,9 +1510,18 @@ def audit_exam_with_deepseek(
 # ══════════════════════════════════════════════════════════════════════════════
 # BACKGROUND EXAM GENERATION QUEUE & WORKER ENGINE
 # ══════════════════════════════════════════════════════════════════════════════
-GLOBAL_JOB_QUEUE: dict[str, dict] = {}
-GLOBAL_QUEUE_LOCK = threading.Lock()
-GLOBAL_JOB_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="DA_ExamWorker")
+@st.cache_resource
+def _init_global_exam_queue_backend():
+    return {
+        "queue": {},
+        "lock": threading.Lock(),
+        "executor": concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="DA_ExamWorker"),
+    }
+
+_QUEUE_BACKEND = _init_global_exam_queue_backend()
+GLOBAL_JOB_QUEUE: dict[str, dict] = _QUEUE_BACKEND["queue"]
+GLOBAL_QUEUE_LOCK: threading.Lock = _QUEUE_BACKEND["lock"]
+GLOBAL_JOB_EXECUTOR: concurrent.futures.ThreadPoolExecutor = _QUEUE_BACKEND["executor"]
 
 
 def get_next_set_number_with_queue(subject: str, year: str, diff: str, topic: str, base_set: int = 0) -> int:
@@ -3549,9 +3558,6 @@ with btn_col2:
         st.session_state["fallback_topic_text"] = ""
         st.rerun()
 
-# ── BACKGROUND GENERATION QUEUE MONITOR ────────────────────────────────────────
-render_exam_queue_section()
-
 if generate_btn:
     is_topic_empty = not topic or (isinstance(topic, str) and not topic.strip())
     has_upload = bool(uploaded_photos) if isinstance(uploaded_photos, list) else (uploaded_photos is not None)
@@ -3629,6 +3635,9 @@ if generate_btn:
         st.session_state.setdefault("my_queued_job_ids", []).append(job_id)
         st.toast(f"🚀 Queued: {display_topic}! Generating in background. You can now configure another exam.")
         st.rerun()
+
+# ── BACKGROUND GENERATION QUEUE MONITOR ────────────────────────────────────────
+render_exam_queue_section()
 
 if st.session_state.questions_text:
     _t, _s, _y, _d, _set, _disp = (
