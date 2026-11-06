@@ -66,6 +66,18 @@ def format_job_sydney_time(dt):
     return str(dt)
 
 
+def _safe_dt_timestamp(dt) -> float:
+    """Safely converts any datetime (naive or timezone-aware) to a float timestamp for sorting."""
+    if isinstance(dt, datetime):
+        try:
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=timezone.utc).timestamp()
+            return dt.timestamp()
+        except Exception:
+            return 0.0
+    return 0.0
+
+
 import numpy as np
 import matplotlib
 
@@ -2303,7 +2315,8 @@ def render_exam_queue_dashboard():
         active_jobs = [j for j in GLOBAL_JOB_QUEUE.values() if j.get("status") in ("QUEUED", "RUNNING")]
         done_jobs = [j for j in GLOBAL_JOB_QUEUE.values() if j.get("status") in ("COMPLETED", "FAILED")]
 
-    done_jobs.sort(key=lambda x: x.get("created_at", datetime.min), reverse=True)
+    active_jobs.sort(key=lambda x: _safe_dt_timestamp(x.get("created_at")))
+    done_jobs.sort(key=lambda x: _safe_dt_timestamp(x.get("created_at")), reverse=True)
     valid_jobs = active_jobs + done_jobs[:15]
 
     if not valid_jobs:
