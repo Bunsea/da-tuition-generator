@@ -2269,13 +2269,21 @@ def _load_job_into_session_state(res: dict):
 def render_exam_queue_dashboard():
     """Renders active, queued, and completed background generation jobs."""
     queued_ids = st.session_state.get("my_queued_job_ids", [])
-    if not queued_ids:
-        return
-
-    with GLOBAL_QUEUE_LOCK:
-        valid_jobs = [GLOBAL_JOB_QUEUE[jid] for jid in queued_ids if jid in GLOBAL_JOB_QUEUE]
+    valid_jobs = []
+    if queued_ids:
+        with GLOBAL_QUEUE_LOCK:
+            valid_jobs = [GLOBAL_JOB_QUEUE[jid] for jid in queued_ids if jid in GLOBAL_JOB_QUEUE]
 
     if not valid_jobs:
+        st.markdown("---")
+        with st.expander("📋 Active Exam Generation Queue (0 active)", expanded=False):
+            st.info(
+                "💡 **No exams currently in the queue.**\n\n"
+                "To generate exams in the background without waiting:\n"
+                "1. Choose your Year, Subject, Topic, and Questions above.\n"
+                "2. Click the red **`🚀 Add to Generation Queue`** button.\n"
+                "3. Your exam will start generating right here. You can immediately configure and queue additional exams in parallel!"
+            )
         return
 
     st.markdown("---")
@@ -2376,13 +2384,13 @@ def render_exam_queue_dashboard():
 def render_exam_queue_section():
     """Wrapper that enables live 3-second auto-refresh if jobs are actively processing."""
     queued_ids = st.session_state.get("my_queued_job_ids", [])
-    if not queued_ids:
-        return
-    with GLOBAL_QUEUE_LOCK:
-        has_running = any(
-            GLOBAL_JOB_QUEUE.get(jid, {}).get("status") in ("RUNNING", "QUEUED")
-            for jid in queued_ids
-        )
+    has_running = False
+    if queued_ids:
+        with GLOBAL_QUEUE_LOCK:
+            has_running = any(
+                GLOBAL_JOB_QUEUE.get(jid, {}).get("status") in ("RUNNING", "QUEUED")
+                for jid in queued_ids
+            )
 
     if has_running and hasattr(st, "fragment"):
         @st.fragment(run_every="3s")
