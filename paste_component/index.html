@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    html, body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: transparent;
+      padding: 2px 1px;
+      overflow: hidden;
+    }
+    .paste-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 14px;
+      background: #F8FAFC;
+      border: 2px dashed #94A3B8;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s ease-in-out;
+      outline: none;
+      user-select: none;
+    }
+    .paste-container:hover, .paste-container:focus-within, .paste-container.highlight {
+      background: #EFF6FF;
+      border-color: #2563EB;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+    }
+    .paste-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #1E293B;
+      font-size: 14px;
+      line-height: 1.35;
+      min-width: 0;
+    }
+    .paste-badge {
+      font-size: 20px;
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #E0E7FF;
+      color: #3730A3;
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      flex-shrink: 0;
+    }
+    .paste-title {
+      font-weight: 600;
+      color: #0F172A;
+      font-size: 14px;
+    }
+    .paste-sub {
+      font-size: 12px;
+      color: #64748B;
+      margin-top: 1px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .paste-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #FFFFFF;
+      color: #1D4ED8;
+      border: 1px solid #BFDBFE;
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+      transition: all 0.12s ease;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .paste-btn:hover {
+      background: #EFF6FF;
+      border-color: #60A5FA;
+      color: #1E40AF;
+    }
+    .paste-btn:active {
+      transform: scale(0.97);
+    }
+    .status-active {
+      color: #2563EB !important;
+      font-weight: 600;
+    }
+    .status-success {
+      color: #16A34A !important;
+      font-weight: 600;
+    }
+    .status-error {
+      color: #DC2626 !important;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="paste-container" id="pasteZone" tabindex="0" title="Click here and press Cmd+V (Mac) or Ctrl+V (Windows) to paste copied screenshots or photos">
+    <div class="paste-info">
+      <div class="paste-badge">📋</div>
+      <div style="min-width: 0;">
+        <div class="paste-title">Paste Copied Photos / Screenshots Here</div>
+        <div class="paste-sub" id="statusText">Click here & press <strong>Cmd+V</strong> / <strong>Ctrl+V</strong>, or click the button →</div>
+      </div>
+    </div>
+    <button type="button" class="paste-btn" id="btnPasteClipboard" title="Click to paste photo directly from your clipboard">
+      <span>📋</span> Paste from Clipboard
+    </button>
+  </div>
+
+  <script>
+    (function() {
+      const pasteZone = document.getElementById("pasteZone");
+      const statusText = document.getElementById("statusText");
+      const btnPasteClipboard = document.getElementById("btnPasteClipboard");
+
+      function sendStreamlitMessage(type, data) {
+        window.parent.postMessage({
+          isStreamlitMessage: true,
+          type: type,
+          ...(data || {})
+        }, "*");
+      }
+
+      function updateHeight() {
+        const height = document.body.scrollHeight || 65;
+        sendStreamlitMessage("streamlit:setFrameHeight", { height: Math.max(height, 58) });
+      }
+
+      function sendValue(payload) {
+        sendStreamlitMessage("streamlit:setComponentValue", { value: payload });
+      }
+
+      async function processFiles(files) {
+        if (!files || files.length === 0) return;
+        statusText.className = "paste-sub status-active";
+        statusText.textContent = `⏳ Reading ${files.length} photo(s) from clipboard...`;
+
+        const results = [];
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          if (!file.type || !file.type.startsWith("image/")) continue;
+
+          const dataUrl = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(file);
+          });
+
+          if (dataUrl) {
+            results.push({
+              name: file.name && file.name !== "image.png" ? file.name : "",
+              type: file.type || "image/png",
+              data: dataUrl
+            });
+          }
+        }
+
+        if (results.length > 0) {
+          const ts = Date.now();
+          statusText.className = "paste-sub status-success";
+          statusText.textContent = `✅ Attached ${results.length} photo(s)! Updating...`;
+          pasteZone.classList.add("highlight");
+          sendValue({
+            id: ts,
+            files: results
+          });
+          setTimeout(() => {
+            pasteZone.classList.remove("highlight");
+            statusText.className = "paste-sub";
+            statusText.innerHTML = "Click here & press <strong>Cmd+V</strong> / <strong>Ctrl+V</strong>, or use the button →";
+          }, 3000);
+        } else {
+          statusText.className = "paste-sub status-error";
+          statusText.textContent = "⚠️ Copied content is not an image.";
+          setTimeout(() => {
+            statusText.className = "paste-sub";
+            statusText.innerHTML = "Click here & press <strong>Cmd+V</strong> / <strong>Ctrl+V</strong>, or use the button →";
+          }, 3000);
+        }
+      }
+
+      function extractImagesFromClipboardEvent(e) {
+        const files = [];
+        const cb = e.clipboardData || e.dataTransfer || window.clipboardData;
+        if (!cb) return files;
+
+        if (cb.files && cb.files.length > 0) {
+          for (let i = 0; i < cb.files.length; i++) {
+            if (cb.files[i].type && cb.files[i].type.startsWith("image/")) {
+              files.push(cb.files[i]);
+            }
+          }
+        }
+
+        if (files.length === 0 && cb.items && cb.items.length > 0) {
+          for (let i = 0; i < cb.items.length; i++) {
+            const item = cb.items[i];
+            if (item.type && item.type.startsWith("image/")) {
+              const blob = item.getAsFile();
+              if (blob) {
+                files.push(blob);
+              }
+            }
+          }
+        }
+        return files;
+      }
+
+      // 1. Paste directly onto the paste box inside the iframe
+      pasteZone.addEventListener("paste", function(e) {
+        const files = extractImagesFromClipboardEvent(e);
+        if (files.length > 0) {
+          e.preventDefault();
+          processFiles(files);
+        }
+      });
+
+      // Drag and drop onto paste box
+      pasteZone.addEventListener("dragover", function(e) {
+        e.preventDefault();
+        pasteZone.classList.add("highlight");
+      });
+      pasteZone.addEventListener("dragleave", function(e) {
+        e.preventDefault();
+        pasteZone.classList.remove("highlight");
+      });
+      pasteZone.addEventListener("drop", function(e) {
+        e.preventDefault();
+        pasteZone.classList.remove("highlight");
+        const files = extractImagesFromClipboardEvent(e);
+        if (files.length > 0) {
+          processFiles(files);
+        }
+      });
+
+      // 2. Button click to read from clipboard via navigator.clipboard.read
+      btnPasteClipboard.addEventListener("click", async function(e) {
+        e.stopPropagation();
+        try {
+          if (!navigator.clipboard || !navigator.clipboard.read) {
+            statusText.className = "paste-sub status-active";
+            statusText.textContent = "Press Cmd+V (Mac) or Ctrl+V (Windows) to paste!";
+            pasteZone.focus();
+            return;
+          }
+          const clipboardItems = await navigator.clipboard.read();
+          const files = [];
+          for (const item of clipboardItems) {
+            const imgType = item.types.find(t => t.startsWith("image/"));
+            if (imgType) {
+              const blob = await item.getType(imgType);
+              if (blob) files.push(blob);
+            }
+          }
+          if (files.length > 0) {
+            processFiles(files);
+          } else {
+            statusText.className = "paste-sub status-error";
+            statusText.textContent = "⚠️ No image found in clipboard. Copy an image first!";
+            setTimeout(() => {
+              statusText.className = "paste-sub";
+              statusText.innerHTML = "Click here & press <strong>Cmd+V</strong> / <strong>Ctrl+V</strong>, or use the button →";
+            }, 3500);
+          }
+        } catch (err) {
+          statusText.className = "paste-sub status-active";
+          statusText.textContent = "Press Cmd+V / Ctrl+V to paste your copied photo!";
+          pasteZone.focus();
+        }
+      });
+
+      // 3. Global paste listener on parent document for seamless page-level paste
+      try {
+        const parentDoc = window.parent.document;
+        if (parentDoc && !parentDoc.__da_photo_paste_bound) {
+          parentDoc.__da_photo_paste_bound = true;
+          parentDoc.addEventListener("paste", function(e) {
+            const activeTag = (parentDoc.activeElement && parentDoc.activeElement.tagName) ? parentDoc.activeElement.tagName.toLowerCase() : "";
+            if (activeTag === "input" || activeTag === "textarea") {
+              return; // Allow normal text pasting into inputs
+            }
+            const files = extractImagesFromClipboardEvent(e);
+            if (files.length > 0) {
+              e.preventDefault();
+              processFiles(files);
+            }
+          });
+        }
+      } catch (err) {
+        // Fallback for isolated iframe contexts
+      }
+
+      // Streamlit lifecycle events
+      window.addEventListener("message", function(event) {
+        if (event.data && event.data.type === "streamlit:render") {
+          updateHeight();
+        }
+      });
+
+      sendStreamlitMessage("streamlit:componentReady", { apiVersion: 1 });
+      setTimeout(updateHeight, 50);
+      setTimeout(updateHeight, 250);
+    })();
+  </script>
+</body>
+</html>

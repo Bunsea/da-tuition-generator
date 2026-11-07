@@ -46,9 +46,21 @@ else:
         return dt_sydney.strftime("%d %b %Y, %I:%M %p")
 
 
-def format_job_sydney_time(dt):
+def format_job_sydney_datetime(dt):
+    """Returns a tuple of (date_str, time_str) in Australia/Sydney timezone, e.g. ('07 Nov 2026', '12:56 PM')."""
     if not dt:
-        return ""
+        return "", ""
+    if isinstance(dt, str):
+        try:
+            clean_ts = dt.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(clean_ts)
+        except Exception:
+            return "", str(dt)
+    elif isinstance(dt, (int, float)):
+        try:
+            dt = datetime.fromtimestamp(dt, tz=timezone.utc)
+        except Exception:
+            return "", ""
     if isinstance(dt, datetime):
         try:
             if dt.tzinfo is None:
@@ -60,14 +72,31 @@ def format_job_sydney_time(dt):
                 import pytz
                 syd_tz = pytz.timezone("Australia/Sydney")
             syd_dt = dt.astimezone(syd_tz)
-            return syd_dt.strftime("%I:%M %p")
+            return syd_dt.strftime("%d %b %Y"), syd_dt.strftime("%I:%M %p")
         except Exception:
-            return dt.strftime("%I:%M %p")
-    return str(dt)
+            return dt.strftime("%d %b %Y"), dt.strftime("%I:%M %p")
+    return "", str(dt)
+
+
+def format_job_sydney_time(dt):
+    date_str, time_str = format_job_sydney_datetime(dt)
+    if date_str and time_str:
+        return f"{date_str}, {time_str}"
+    return time_str or date_str or (str(dt) if dt else "")
 
 
 def _safe_dt_timestamp(dt) -> float:
-    """Safely converts any datetime (naive or timezone-aware) to a float timestamp for sorting."""
+    """Safely converts any datetime (naive, timezone-aware, or ISO string) to a float timestamp for sorting."""
+    if not dt:
+        return 0.0
+    if isinstance(dt, str):
+        try:
+            clean_ts = dt.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(clean_ts)
+        except Exception:
+            return 0.0
+    elif isinstance(dt, (int, float)):
+        return float(dt)
     if isinstance(dt, datetime):
         try:
             if dt.tzinfo is None:
@@ -76,6 +105,96 @@ def _safe_dt_timestamp(dt) -> float:
         except Exception:
             return 0.0
     return 0.0
+
+
+def get_client_computer_info():
+    """Detects client computer / OS / IP information from Streamlit context."""
+    os_name = "Computer"
+    ip_str = ""
+    try:
+        headers = getattr(st.context, "headers", None) or {}
+        ua = headers.get("user-agent", "") or headers.get("User-Agent", "")
+        platform = str(headers.get("sec-ch-ua-platform", "")).replace('"', "").strip()
+        if platform:
+            if "mac" in platform.lower():
+                os_name = "Mac"
+            elif "win" in platform.lower():
+                os_name = "Windows PC"
+            elif "linux" in platform.lower():
+                os_name = "Linux PC"
+            elif "ios" in platform.lower():
+                os_name = "iPad/iPhone"
+            elif "android" in platform.lower():
+                os_name = "Android"
+            else:
+                os_name = platform
+        elif "Macintosh" in ua or "Mac OS" in ua:
+            os_name = "Mac"
+        elif "Windows" in ua:
+            os_name = "Windows PC"
+        elif "iPad" in ua:
+            os_name = "iPad"
+        elif "iPhone" in ua:
+            os_name = "iPhone"
+        elif "Linux" in ua or "X11" in ua:
+            os_name = "Linux PC"
+
+        ip_raw = getattr(st.context, "ip_address", None) or headers.get("x-forwarded-for", "")
+        if ip_raw:
+            ip_str = str(ip_raw).split(",")[0].strip()
+    except Exception:
+        pass
+    return os_name, ip_str
+
+
+def get_effective_computer_name() -> str:
+    """Returns the effective station / computer name, checking session state, cookies, or auto-detect."""
+    if st.session_state.get("computer_name"):
+        return str(st.session_state["computer_name"]).strip()
+    try:
+        cookies = getattr(st.context, "cookies", None) or {}
+        saved_cookie = cookies.get("da_computer_name")
+        if saved_cookie:
+            import urllib.parse
+            clean_name = urllib.parse.unquote(saved_cookie).strip()
+            if clean_name:
+                st.session_state["computer_name"] = clean_name
+                return clean_name
+    except Exception:
+        pass
+    os_name, ip_str = get_client_computer_info()
+    if ip_str and not ip_str.startswith("127.") and ip_str != "::1":
+        short_ip = ip_str.split(".")[-1] if "." in ip_str else ip_str[-4:]
+        default_name = f"{os_name} (.{short_ip})"
+    else:
+        default_name = os_name
+    st.session_state["computer_name"] = default_name
+    return default_name
+
+
+def sync_computer_name_to_client(name: str):
+    """Syncs the chosen computer name to browser localStorage and cookie."""
+    if not name:
+        return
+    clean_safe = name.replace("'", "\\'").replace('"', '\\"')
+    try:
+        import streamlit.components.v1 as _comp
+        _comp.html(
+            f"""
+            <script>
+            (function() {{
+                try {{
+                    const parentDoc = window.parent.document;
+                    localStorage.setItem('da_computer_name', '{clean_safe}');
+                    parentDoc.cookie = 'da_computer_name=' + encodeURIComponent('{clean_safe}') + '; path=/; max-age=31536000; SameSite=Lax';
+                }} catch(e) {{}}
+            }})();
+            </script>
+            """,
+            height=0,
+        )
+    except Exception:
+        pass
 
 
 import numpy as np
@@ -212,6 +331,83 @@ def get_next_set_number(subject, year, diff, clean_topic):
     return k
 
 
+def clean_redundant_topic_prefix(topic_str: str, year: str = "", subject: str = "", diff: str = "") -> str:
+    """Strips redundant grade, subject, level, and NESA prefixes from topic titles."""
+    if not topic_str:
+        return ""
+    s = str(topic_str).replace("_", " ").strip()
+    s = re.sub(r"^\d+[\.\-]\s*", "", s).strip()
+    s = re.sub(r"^(?:NESA\s*(?:Syllabus)?[\s\-_:]*)+", "", s, flags=re.IGNORECASE).strip()
+
+    tokens = [
+        r"Year\s*\d+", r"Yr\s*\d+",
+        r"Maths", r"Mathematics", r"English", r"Science", r"Business\s*Studies", r"Legal\s*Studies",
+        r"Advanced", r"Adv", r"Standard", r"Std",
+        r"Extension\s*1", r"Ext\s*1", r"Extension\s*2", r"Ext\s*2", r"Extension", r"Ext",
+        r"S6", r"Stage\s*\d+", r"S\d+"
+    ]
+    if subject:
+        tokens.append(re.escape(subject))
+    if diff:
+        tokens.append(re.escape(diff))
+    if year:
+        tokens.append(re.escape(year))
+
+    pattern = r"^(?:" + "|".join(tokens) + r")[\s\-_,:]*"
+
+    prev = ""
+    while prev != s:
+        prev = s
+        s = re.sub(r"^(?:NESA\s*(?:Syllabus)?[\s\-_:]*)+", "", s, flags=re.IGNORECASE).strip()
+        s = re.sub(pattern, "", s, flags=re.IGNORECASE).strip()
+
+    return s if s else str(topic_str).strip()
+
+
+def build_exam_filename(topic: str, year: str, subject: str, diff: str, set_num: int, has_solutions: bool = False, num_mc: int = 0, num_easy: int = 0, num_med: int = 0, num_hard: int = 0, num_xh: int = 0, ext: str = "") -> str:
+    """Builds a standardized, non-redundant exam filename matching DA Tuition format."""
+    clean_t = clean_redundant_topic_prefix(topic, year, subject, diff)
+    clean_t = re.sub(r"\s*Set\s*\d+.*", "", clean_t, flags=re.IGNORECASE).strip()
+    safe_topic = clean_t.replace("/", "-").replace("\\", "-")
+
+    dist_parts = []
+    if num_mc:
+        dist_parts.append(f"{num_mc} MC")
+    if num_easy:
+        dist_parts.append(f"{num_easy} Easy")
+    if num_med:
+        dist_parts.append(f"{num_med} Medium")
+    if num_hard:
+        dist_parts.append(f"{num_hard} Hard")
+    if num_xh:
+        dist_parts.append(f"{num_xh} Ext. Hard")
+    inner_dist = ", ".join(dist_parts)
+    dist_str = f" ({inner_dist})" if dist_parts else ""
+
+    yr_short = year.replace("Year ", "Yr") if year else ""
+
+    level_map = {
+        "Advanced": "Adv",
+        "Extension": "Ext1",
+        "Extension 1": "Ext1",
+        "Extension 2": "Ext2",
+        "Standard": "Std",
+    }
+    short_diff = level_map.get(diff, diff) if diff else ""
+    lvl_text = f" {short_diff}" if short_diff else ""
+    sol_tag = " w sol" if has_solutions else ""
+
+    suffix = f"{yr_short} {subject}{lvl_text}".strip()
+    suffix_part = f" - {suffix}" if suffix else ""
+
+    base = f"{safe_topic} Set {set_num}{sol_tag}{dist_str}{suffix_part}"
+    base = re.sub(r"\s+", " ", base).strip()
+    if ext:
+        ext = ext if ext.startswith(".") else f".{ext}"
+        return f"{base}{ext}"
+    return base
+
+
 def save_to_supabase(
     clean_topic,
     subject,
@@ -237,6 +433,18 @@ def save_to_supabase(
     if not supabase_client:
         return False, "Supabase is not connected. Missing URL or Key."
 
+    if not pdf_bytes and questions_text:
+        try:
+            tmp_wd = tempfile.mkdtemp(prefix="da_save_recompile_")
+            p_b, _, _, _, _ = _render_exam_files(
+                tmp_wd, clean_topic, f"{year} {subject} {diff}".strip(), questions_text, answers_text, "", 10
+            )
+            shutil.rmtree(tmp_wd, ignore_errors=True)
+            if p_b:
+                pdf_bytes = p_b
+        except Exception as e_rec:
+            _log_error("save_to_supabase_recompile", e_rec)
+
     if not pdf_bytes:
         return False, "Cannot archive exam: PDF file is empty or compilation failed."
 
@@ -251,24 +459,19 @@ def save_to_supabase(
         dist_parts.append(f"{num_hard} Hard")
     if num_xh:
         dist_parts.append(f"{num_xh} Ext. Hard")
-    dist_str = f" ({', '.join(dist_parts)})" if dist_parts else ""
+    inner_dist = ", ".join(dist_parts)
+    dist_str = f" ({inner_dist})" if dist_parts else ""
 
+    clean_t = clean_redundant_topic_prefix(clean_topic, year, subject, diff)
+    clean_t = re.sub(r"\s*Set\s*\d+.*", "", clean_t, flags=re.IGNORECASE).strip()
     yr_short = year.replace("Year ", "Yr")
-    db_topic = f"{clean_topic} ({yr_short}) Set {set_num}{dist_str}"
+    db_topic = f"{clean_t} ({yr_short}) Set {set_num}{dist_str}"
 
-    level_map = {
-        "Advanced": "Adv",
-        "Extension": "Ext1",
-        "Extension 2": "Ext2",
-        "Standard": "Std",
-    }
-
-    short_diff = level_map.get(diff, diff) if diff else ""
-    lvl_text = f" {short_diff}" if short_diff else ""
-    safe_topic = clean_topic.replace("/", "-").replace("\\", "-")
-    # Append 'w sol' suffix to filename when fully worked solutions are included
-    sol_tag = " w sol" if has_solutions else ""
-    file_base = f"{safe_topic} Set {set_num}{sol_tag}{dist_str} - {yr_short} {subject}{lvl_text}"
+    file_base = build_exam_filename(
+        clean_topic, year, subject, diff, set_num,
+        has_solutions=has_solutions,
+        num_mc=num_mc, num_easy=num_easy, num_med=num_med, num_hard=num_hard, num_xh=num_xh
+    )
     pdf_path = f"{subject}/{year}/{file_base}.pdf"
     docx_path = f"{subject}/{year}/{file_base}.docx"
     instr_path = f"{subject}/{year}/{file_base}_instructions.txt"
@@ -954,13 +1157,14 @@ def build_word_doc_pandoc(content, answers, solutions, topic, header_title, tota
         else ""
     )
 
+    clean_t = clean_redundant_topic_prefix(topic, header_title, "", "")
     full_tex = f"""\\documentclass{{article}}
 \\usepackage{{amsmath, amssymb, amsfonts, graphicx, booktabs, array, bm, mathtools}}
 \\begin{{document}}
 \\begin{{center}}
     \\includegraphics[width=1.2in]{{{LOGO_PATH.replace(chr(92), "/")}}} \\\\[0.4cm]
     {{\\LARGE \\textbf{{{header_title}}}}} \\\\[0.2cm]
-    {{\\Large \\textbf{{{topic}}}}}
+    {{\\Large \\textbf{{{clean_t}}}}}
 \\end{{center}}
 \\vspace{{0.5cm}}
 \\noindent
@@ -1003,8 +1207,9 @@ def build_latex_pdf(display_topic, header_title, content, answers, solutions, to
     if os.path.exists(pdf_filename):
         os.remove(pdf_filename)
 
+    clean_disp = clean_redundant_topic_prefix(display_topic, header_title, "", "")
     safe_title = header_title.replace("&", r"\&").replace("%", r"\%").replace("$", r"\$").replace("_", r"\_")
-    safe_topic = display_topic.replace("&", r"\&").replace("%", r"\%").replace("$", r"\$").replace("_", r"\_")
+    safe_topic = clean_disp.replace("&", r"\&").replace("%", r"\%").replace("$", r"\$").replace("_", r"\_")
 
     formatted_content = _format_exam_content(content)
 
@@ -1118,6 +1323,13 @@ def build_latex_pdf(display_topic, header_title, content, answers, solutions, to
                         ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", filename],
                         cwd=work_dir, capture_output=True, text=True,
                     )
+
+            if not os.path.exists(pdf_filename):
+                # Final fallback pass: run without -halt-on-error so pdflatex recovers from minor math/tikz warnings and still emits the PDF
+                subprocess.run(
+                    ["pdflatex", "-interaction=nonstopmode", filename],
+                    cwd=work_dir, capture_output=True, text=True,
+                )
 
         if os.path.exists(pdf_filename):
             with open(pdf_filename, "rb") as f:
@@ -1404,6 +1616,9 @@ def audit_exam_with_deepseek(
             "correction_prompt": "",
             "reasoning": "",
             "auto_corrected": False,
+            "ds_in_tok": 0,
+            "ds_out_tok": 0,
+            "ds_cost": 0.0,
         }
 
     level_str = f" {actual_level}" if actual_level else ""
@@ -1445,6 +1660,8 @@ def audit_exam_with_deepseek(
 
     raw_content = ""
     reasoning_content = ""
+    ds_in_tok = 0
+    ds_out_tok = 0
 
     # Strategy 1: OpenAI SDK if installed
     used_sdk = False
@@ -1465,6 +1682,9 @@ def audit_exam_with_deepseek(
                 raw_content = choice.message.content or ""
                 reasoning_content = getattr(choice.message, "reasoning_content", "") or ""
                 used_sdk = True
+            if getattr(response, "usage", None):
+                ds_in_tok = getattr(response.usage, "prompt_tokens", 0) or 0
+                ds_out_tok = getattr(response.usage, "completion_tokens", 0) or 0
         except Exception as e_sdk:
             _log_error("OpenAI SDK DeepSeek Call Failed, falling back to HTTP", e_sdk)
 
@@ -1494,6 +1714,9 @@ def audit_exam_with_deepseek(
                     msg = res_obj["choices"][0].get("message", {})
                     raw_content = msg.get("content", "") or ""
                     reasoning_content = msg.get("reasoning_content", "") or ""
+                if res_obj.get("usage"):
+                    ds_in_tok = res_obj["usage"].get("prompt_tokens", 0) or 0
+                    ds_out_tok = res_obj["usage"].get("completion_tokens", 0) or 0
         except Exception as e_http:
             _log_error("DeepSeek Auditor API Failure", e_http)
             err_msg = str(e_http)
@@ -1512,6 +1735,9 @@ def audit_exam_with_deepseek(
                 "reasoning": "",
                 "auto_corrected": False,
                 "error": friendly_err,
+                "ds_in_tok": 0,
+                "ds_out_tok": 0,
+                "ds_cost": 0.0,
             }
 
     # Parse delimited response
@@ -1529,6 +1755,9 @@ def audit_exam_with_deepseek(
     if corr_prompt.upper() in ["NONE", "N/A", "NONE."]:
         corr_prompt = ""
 
+    # DeepSeek-R1 (deepseek-reasoner) pricing: $0.55 / 1M input, $2.19 / 1M output (including reasoning tokens)
+    ds_cost = round(((ds_in_tok / 1_000_000) * 0.55) + ((ds_out_tok / 1_000_000) * 2.19), 6)
+
     return {
         "status": status,
         "summary": summary,
@@ -1536,6 +1765,9 @@ def audit_exam_with_deepseek(
         "correction_prompt": corr_prompt,
         "reasoning": reasoning_content,
         "auto_corrected": False,
+        "ds_in_tok": ds_in_tok,
+        "ds_out_tok": ds_out_tok,
+        "ds_cost": ds_cost,
     }
 
 
@@ -1636,8 +1868,8 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
         template_f = ""
         auto_name_rule = ""
         if has_upload:
-            template_f = "===FILENAME_START===\nSchool_Subject_Year_Level_AssessmentOrTopic\n===FILENAME_END===\n"
-            auto_name_rule = "12. AUTO-NAMING & TOPIC EXTRACTION: You MUST inspect the attached document(s) and extract the actual School Name (e.g. Bonnyrigg High School), Subject (e.g. Maths), Year Group (e.g. Year 9), and official Assessment Title / Term (e.g. Term 3 Exam, Assessment Task 2, Half Yearly). Format EXACTLY like this: School_Subject_Year_Level_AssessmentTitle (e.g. Bonnyrigg_High_School_Maths_Year_9_Acceleration_Term_3_Exam). If no term/exam title is given, use a concise topic summary. Use underscores. Place inside ===FILENAME_START=== and ===FILENAME_END=== tags. Keep this filename identical and consistent across generations for the same document."
+            template_f = "===FILENAME_START===\nConcise_Topic_Or_AssessmentTitle\n===FILENAME_END===\n"
+            auto_name_rule = "12. AUTO-NAMING & TOPIC EXTRACTION: You MUST inspect the attached document(s). If it is a school assessment notification, extract the School Name and official Assessment Title (e.g. Bonnyrigg_High_School_Assessment_Task_2). If it is a syllabus, textbook, or general topic list, extract ONLY the concise Topic Title itself (e.g. Sequences_and_Series, Transformations_and_Modelling) WITHOUT prefixing NESA, subject, or year group. Use underscores. Place inside ===FILENAME_START=== and ===FILENAME_END=== tags. Keep this topic name identical and consistent across generations for the same document."
 
         template_c = "===LATEX_CONTENT_START===\n"
         template_a = "===LATEX_ANSWERS_START===\n"
@@ -1919,7 +2151,7 @@ When instructed, your final combined output must follow this template structure 
                 "   - Extract EVERY topic, sub-topic, and skill specified in the notification.\n"
                 "   - Your generated exam MUST STRICTLY AND EXCLUSIVELY focus on the topics, sub-topics, and syllabus outcomes listed across all uploaded pages.\n"
                 "   - DO NOT generate questions on unlisted topics.\n"
-                "   - Extract the School Name, Subject, Year Group, and Topic Summary to format the filename in ===FILENAME_START=== tags.\n"
+                "   - Extract the School Name and Assessment Title for school notices in ===FILENAME_START=== tags. For syllabus/topic documents, extract ONLY the concise Topic Name (e.g. Sequences_and_Series) without prefixing NESA, year, or subject in ===FILENAME_START=== tags.\n"
                 "2. IF THE ATTACHMENTS CONTAIN SAMPLE / EXEMPLAR QUESTIONS OR A WORKSHEET:\n"
                 "   - Reverse-engineer the mechanics, phrasing, difficulty, and diagram styles of those exact questions, and generate original parallel practice questions testing the same competency."
             )
@@ -1933,8 +2165,6 @@ When instructed, your final combined output must follow this template structure 
         models_to_try = [
             "gemini-3.8-flash",
             "gemini-3.6-flash",
-            "gemini-2.5-flash",
-            "gemini-2.0-flash",
         ]
         out = None
         last_error = None
@@ -1945,7 +2175,7 @@ When instructed, your final combined output must follow this template structure 
         max_retries = 3
         for attempt in range(max_retries):
             for model_name in models_to_try:
-                cur_max_tok = 8192 if ("2.0" in model_name or "2.5" in model_name) else MAX_OUTPUT_TOKENS
+                cur_max_tok = MAX_OUTPUT_TOKENS
                 tool_candidates = [[], active_tools] if (total_q >= 30 or not active_tools) else [active_tools, []]
 
                 for t_list in tool_candidates:
@@ -2033,9 +2263,9 @@ When instructed, your final combined output must follow this template structure 
                         "===LATEX_CONTENT_START=== ... ===LATEX_CONTENT_END===\n"
                         "===LATEX_ANSWERS_START=== ... ===LATEX_ANSWERS_END===\n"
                     )
-                    refine_models = [model_used or "gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash"]
+                    refine_models = ["gemini-3.8-flash", "gemini-3.6-flash"]
                     for r_model in refine_models:
-                        cur_ref_tok = 8192 if ("2.0" in r_model or "2.5" in r_model) else MAX_OUTPUT_TOKENS
+                        cur_ref_tok = MAX_OUTPUT_TOKENS
                         try:
                             ref_cfg = types.GenerateContentConfig(
                                 max_output_tokens=cur_ref_tok,
@@ -2073,7 +2303,8 @@ When instructed, your final combined output must follow this template structure 
         fn_m = re.search(r"===?\s*FILENAME_START\s*===?(.*?)===?\s*FILENAME_END\s*===?", out, re.DOTALL | re.IGNORECASE)
         if fn_m and fn_m.group(1).strip():
             ai_generated_name = re.sub(r"[^A-Za-z0-9_\-\(\) ]", "_", fn_m.group(1).strip())
-            clean_topic = ai_generated_name.replace("_", " ")
+            raw_ai = ai_generated_name.replace("_", " ").strip()
+            clean_topic = clean_redundant_topic_prefix(raw_ai, grades_string, subject, actual_level) or raw_ai
             display_topic = f"{clean_topic} Set {current_set_number}"
 
         c_m = re.search(r"===?\s*LATEX_CONTENT_START\s*===?(.*?)(?:===?\s*LATEX_CONTENT_END\s*===?|===?\s*LATEX_ANSWERS_START|$)", out, re.DOTALL | re.IGNORECASE)
@@ -2092,7 +2323,7 @@ When instructed, your final combined output must follow this template structure 
             ]
             s_out = None
             for s_model in models_to_try:
-                cur_max_tok = 8192 if ("2.0" in s_model or "2.5" in s_model) else MAX_OUTPUT_TOKENS
+                cur_max_tok = MAX_OUTPUT_TOKENS
                 tool_candidates = [[], active_tools] if (total_q >= 30 or not active_tools) else [active_tools, []]
                 for t_list in tool_candidates:
                     try:
@@ -2136,25 +2367,12 @@ When instructed, your final combined output must follow this template structure 
         )
         shutil.rmtree(work_dir, ignore_errors=True)
 
-        model_lower = (model_used or "").lower()
-        if "3.8-flash" in model_lower or "3.7-flash" in model_lower or "3.6-flash" in model_lower:
-            in_cost = (in_tok / 1_000_000) * 0.75
-            out_cost = (out_tok / 1_000_000) * 3.75
-        elif "flash-lite" in model_lower:
-            in_cost = (in_tok / 1_000_000) * 0.10
-            out_cost = (out_tok / 1_000_000) * 0.40
-        elif "2.5-flash" in model_lower or "3.5-flash" in model_lower or "flash" in model_lower:
-            in_cost = (in_tok / 1_000_000) * 0.30
-            out_cost = (out_tok / 1_000_000) * 2.50
-        elif "pro" in model_lower:
-            in_cost = (in_tok / 1_000_000) * 1.50
-            out_cost = (out_tok / 1_000_000) * 6.00
-        else:
-            in_cost = (in_tok / 1_000_000) * 0.75
-            out_cost = (out_tok / 1_000_000) * 3.75
-
+        # Pricing: Gemini 3.8 Flash ($0.75 / 1M in, $3.75 / 1M out) + Google Search ($0.014) + DeepSeek-R1 Auditor ($0.55 in, $2.19 out)
+        in_cost = (in_tok / 1_000_000) * 0.75
+        out_cost = (out_tok / 1_000_000) * 3.75
         search_cost = 0.014 if used_search else 0.00
-        total_cost = in_cost + out_cost + search_cost
+        ds_cost = audit_res.get("ds_cost", 0.0) if audit_res else 0.0
+        total_cost = round(in_cost + out_cost + search_cost + ds_cost, 5)
 
         return {
             "success": True,
@@ -2183,14 +2401,16 @@ When instructed, your final combined output must follow this template structure 
             "meta_xh": num_xh,
             "meta_extra_instructions": extra_instructions.strip() if extra_instructions else "",
             "deepseek_audit": audit_res,
-            "meta_model_used": model_used,
+            "meta_model_used": model_used or "gemini-3.8-flash",
             "meta_input_tokens": in_tok,
             "meta_output_tokens": out_tok,
             "meta_total_cost": total_cost,
+            "meta_ds_cost": ds_cost,
             "used_search": used_search,
             "phase_1_raw": out,
             "saved_ai_payload": ai_payload,
             "created_by": created_by,
+            "computer_name": params.get("computer_name") or get_effective_computer_name(),
         }
     except Exception as e:
         _log_error("generate_exam_worker", e)
@@ -2200,6 +2420,7 @@ When instructed, your final combined output must follow this template structure 
 def submit_exam_job(params: dict, teacher_username: str = "") -> str:
     """Submits an exam generation job to the background worker pool."""
     job_id = str(uuid.uuid4())[:8]
+    comp_name = params.get("computer_name") or get_effective_computer_name()
     with GLOBAL_QUEUE_LOCK:
         GLOBAL_JOB_QUEUE[job_id] = {
             "id": job_id,
@@ -2213,6 +2434,7 @@ def submit_exam_job(params: dict, teacher_username: str = "") -> str:
             "auto_solutions": params.get("auto_solutions", False),
             "created_at": datetime.now(timezone.utc),
             "created_by": params.get("created_by", "Teacher"),
+            "computer_name": comp_name,
             "username": teacher_username,
             "status": "QUEUED",  # QUEUED, RUNNING, COMPLETED, FAILED
             "progress": "Waiting in queue...",
@@ -2303,10 +2525,48 @@ def _load_job_into_session_state(res: dict):
         "meta_input_tokens": res.get("meta_input_tokens", 0),
         "meta_output_tokens": res.get("meta_output_tokens", 0),
         "meta_total_cost": res.get("meta_total_cost", 0.0),
+        "meta_ds_cost": res.get("meta_ds_cost", 0.0),
         "used_search": res.get("used_search", False),
         "phase_1_raw": res.get("phase_1_raw", ""),
         "saved_ai_payload": res.get("saved_ai_payload", []),
     })
+
+
+def _save_queue_job_to_cloud(job: dict) -> tuple[bool, str]:
+    """Helper to save a completed queue job result to Supabase cloud library."""
+    res = job.get("result")
+    if not res:
+        return False, "Exam result not ready."
+    creator = job.get("created_by") or "Teacher"
+    comp = job.get("computer_name") or ""
+    c_by = res.get("created_by") or creator
+    if comp and comp not in c_by:
+        c_by = f"{c_by} ({comp})"
+    s_ok, s_msg = save_to_supabase(
+        res.get("meta_topic") or job.get("title", "Exam"),
+        res.get("meta_subject") or job.get("subject", ""),
+        res.get("meta_year") or job.get("year", ""),
+        res.get("meta_diff") or job.get("level", ""),
+        res.get("meta_set") or job.get("meta_set", 1),
+        res.get("pdf_bytes"),
+        res.get("word_bytes"),
+        num_mc=res.get("meta_mc", 0),
+        num_easy=res.get("meta_easy", 0),
+        num_med=res.get("meta_med", 0),
+        num_hard=res.get("meta_hard", 0),
+        num_xh=res.get("meta_xh", 0),
+        existing_id=None,
+        cost=res.get("meta_total_cost"),
+        model=res.get("meta_model_used"),
+        extra_instructions=res.get("meta_extra_instructions", ""),
+        created_by=c_by,
+        has_solutions=bool(res.get("solutions_text")),
+        questions_text=res.get("questions_text", ""),
+        answers_text=res.get("answers_text", ""),
+    )
+    if s_ok:
+        job["saved_to_cloud"] = True
+    return s_ok, s_msg
 
 
 def render_exam_queue_dashboard():
@@ -2317,7 +2577,7 @@ def render_exam_queue_dashboard():
 
     active_jobs.sort(key=lambda x: _safe_dt_timestamp(x.get("created_at")))
     done_jobs.sort(key=lambda x: _safe_dt_timestamp(x.get("created_at")), reverse=True)
-    valid_jobs = active_jobs + done_jobs[:15]
+    valid_jobs = active_jobs + done_jobs[:100]
 
     if not valid_jobs:
         st.markdown("---")
@@ -2344,13 +2604,35 @@ def render_exam_queue_dashboard():
         badges.append(f"{n_done} Ready")
     summary_str = " · ".join(badges) if badges else f"{len(valid_jobs)} Exams"
 
-    q_head_c1, q_head_c2, q_head_c3 = st.columns([3, 1, 1], vertical_alignment="center")
+    unsaved_jobs = [
+        j for j in done_jobs
+        if j.get("status") == "COMPLETED" and not j.get("saved_to_cloud") and j.get("result")
+    ]
+
+    q_head_c1, q_head_c2, q_head_c3, q_head_c4 = st.columns([3, 1.3, 1.1, 1.1], vertical_alignment="center")
     with q_head_c1:
         st.markdown(f"### 📋 Active Exam Generation Queue ({summary_str})")
     with q_head_c2:
-        if st.button("🔄 Refresh Status", key="btn_refresh_q", help="Refresh progress of background jobs"):
+        save_all_btn_text = f"💾 Save All ({len(unsaved_jobs)})" if unsaved_jobs else "💾 Save All"
+        if st.button(save_all_btn_text, key="btn_save_all_q", type="primary" if unsaved_jobs else "secondary", disabled=(len(unsaved_jobs) == 0), help="Save all completed exams in the queue to Cloud Library"):
+            success_count = 0
+            err_count = 0
+            with st.spinner(f"Saving {len(unsaved_jobs)} exam(s) to Cloud Library..."):
+                for j in unsaved_jobs:
+                    s_ok, _ = _save_queue_job_to_cloud(j)
+                    if s_ok:
+                        success_count += 1
+                    else:
+                        err_count += 1
+            if success_count > 0:
+                st.toast(f"☁️ Successfully saved {success_count} exam(s) to Cloud Library!")
+            if err_count > 0:
+                st.warning(f"⚠️ {err_count} exam(s) failed to save.")
             st.rerun()
     with q_head_c3:
+        if st.button("🔄 Refresh Status", key="btn_refresh_q", help="Refresh progress of background jobs"):
+            st.rerun()
+    with q_head_c4:
         if st.button("🗑️ Clear Done", key="btn_clear_done_q", help="Clear completed or failed jobs from this list"):
             with GLOBAL_QUEUE_LOCK:
                 for j in done_jobs:
@@ -2366,13 +2648,25 @@ def render_exam_queue_dashboard():
         progress = job.get("progress", "")
         lvl = f" {job['level']}" if job.get("level") else ""
         creator = job.get("created_by") or "Teacher"
-        time_str = format_job_sydney_time(job.get("created_at"))
+        comp = job.get("computer_name") or ""
+        date_str, time_str = format_job_sydney_datetime(job.get("created_at"))
         meta_line = f"{job.get('year', '')}{lvl} · {job.get('subject', '')} · {total_q} Questions"
+        if date_str:
+            meta_line += f" · 📅 {date_str}"
         if time_str:
             meta_line += f" · 🕒 {time_str}"
         meta_line += f" · 👤 {creator}"
+        if comp and comp not in creator:
+            meta_line += f" · 💻 {comp}"
         if job.get("auto_solutions"):
             meta_line += " · 🧠 With Solutions"
+        res_data = job.get("result") or {}
+        cost_val = res_data.get("meta_total_cost") if res_data.get("meta_total_cost") is not None else job.get("cost")
+        if cost_val is not None:
+            try:
+                meta_line += f" · 💸 ${float(cost_val):.4f}"
+            except Exception:
+                pass
 
         try:
             card_container = st.container(border=True)
@@ -2408,11 +2702,24 @@ def render_exam_queue_dashboard():
                         st.rerun()
                 with b2:
                     if res.get("pdf_bytes"):
-                        safe_fn = re.sub(r"[^A-Za-z0-9_\-]", "_", title)
+                        fn_pdf = build_exam_filename(
+                            res.get("meta_topic") or title,
+                            res.get("meta_year") or job.get("year", ""),
+                            res.get("meta_subject") or job.get("subject", ""),
+                            res.get("meta_diff") or job.get("level", ""),
+                            res.get("meta_set") or job.get("meta_set", 1),
+                            has_solutions=bool(res.get("solutions_text")),
+                            num_mc=res.get("meta_mc", 0),
+                            num_easy=res.get("meta_easy", 0),
+                            num_med=res.get("meta_med", 0),
+                            num_hard=res.get("meta_hard", 0),
+                            num_xh=res.get("meta_xh", 0),
+                            ext="pdf",
+                        )
                         st.download_button(
                             "📥 Download PDF",
                             data=res["pdf_bytes"],
-                            file_name=f"{safe_fn}.pdf",
+                            file_name=fn_pdf,
                             mime="application/pdf",
                             key=f"q_dl_{jid}",
                             use_container_width=True,
@@ -2420,23 +2727,8 @@ def render_exam_queue_dashboard():
                 with b3:
                     if not job.get("saved_to_cloud"):
                         if st.button("💾 Save to Library", key=f"q_save_{jid}", use_container_width=True):
-                            s_ok, s_msg = save_to_supabase(
-                                res["meta_topic"], res["meta_subject"], res["meta_year"], res["meta_diff"],
-                                res["meta_set"], res["pdf_bytes"], res["word_bytes"],
-                                num_mc=res.get("meta_mc", 0), num_easy=res.get("meta_easy", 0),
-                                num_med=res.get("meta_med", 0), num_hard=res.get("meta_hard", 0),
-                                num_xh=res.get("meta_xh", 0),
-                                existing_id=None,
-                                cost=res.get("meta_total_cost"),
-                                model=res.get("meta_model_used"),
-                                extra_instructions=res.get("meta_extra_instructions", ""),
-                                created_by=res.get("created_by", "Teacher"),
-                                has_solutions=bool(res.get("solutions_text")),
-                                questions_text=res.get("questions_text", ""),
-                                answers_text=res.get("answers_text", ""),
-                            )
+                            s_ok, s_msg = _save_queue_job_to_cloud(job)
                             if s_ok:
-                                job["saved_to_cloud"] = True
                                 st.toast(f"☁️ Saved {title} to Cloud Library!")
                                 st.rerun()
                             else:
@@ -2571,6 +2863,14 @@ st.markdown(
 # ── FLOATING HOVER TOOLTIP INJECTION FOR LONG DROPDOWN OPTIONS ─────────────────
 import streamlit.components.v1 as components
 
+PASTE_COMPONENT_DIR = os.path.join(os.path.dirname(__file__), "paste_component")
+_paste_component = None
+if os.path.exists(PASTE_COMPONENT_DIR):
+    try:
+        _paste_component = components.declare_component("paste_uploader", path=PASTE_COMPONENT_DIR)
+    except Exception as _e:
+        _log_error("declare_paste_component", _e)
+
 components.html(
     """
     <script>
@@ -2582,6 +2882,14 @@ components.html(
             // Only initialize listeners once per window session
             if (parentDoc.__da_tooltip_initialized) return;
             parentDoc.__da_tooltip_initialized = true;
+
+            // Ensure computer name stored in localStorage is mirrored to document cookie
+            try {
+                const savedComp = localStorage.getItem('da_computer_name');
+                if (savedComp && parentDoc.cookie.indexOf('da_computer_name=') === -1) {
+                    parentDoc.cookie = 'da_computer_name=' + encodeURIComponent(savedComp) + '; path=/; max-age=31536000; SameSite=Lax';
+                }
+            } catch(e) {}
 
             let tooltip = parentDoc.getElementById('da-tuition-option-tooltip');
             if (!tooltip) {
@@ -2749,6 +3057,12 @@ if not st.session_state.get("logged_in"):
         st.markdown("##### Senior Teacher & Admin Master Login")
         with st.form("senior_login_form"):
             master_pwd = st.text_input("Master Password or Admin PIN", type="password")
+            station_input = st.text_input(
+                "Computer / Workstation Name (Optional)",
+                value=get_effective_computer_name(),
+                placeholder="e.g. Bunsea's Mac, Front Desk PC, Lab 1",
+                help="Enter a name for this computer so exams generated from it are labeled with your workstation name."
+            ).strip()
             submit_master = st.form_submit_button("Log In as Senior Teacher", type="primary", use_container_width=True)
 
             if submit_master:
@@ -2756,9 +3070,15 @@ if not st.session_state.get("logged_in"):
                     st.session_state["logged_in"] = True
                     st.session_state["user_role"] = "senior"
                     st.session_state["username"] = "admin"
-                    st.session_state["user_display_name"] = "Senior Teacher"
+                    comp_name = station_input if station_input else get_effective_computer_name()
+                    st.session_state["computer_name"] = comp_name
+                    if station_input and station_input not in ("Computer", "Mac", "Windows PC"):
+                        st.session_state["user_display_name"] = f"Senior Teacher ({station_input})"
+                    else:
+                        st.session_state["user_display_name"] = "Senior Teacher"
                     st.session_state["user_api_key"] = os.environ.get("GEMINI_API_KEY", "")
                     st.session_state["admin_pin"] = "DA_ADMIN"
+                    sync_computer_name_to_client(comp_name)
                     st.success("Senior Teacher access granted!")
                     time.sleep(0.4)
                     st.rerun()
@@ -2862,6 +3182,25 @@ with st.sidebar:
     role_badge = "👑 Senior Teacher" if st.session_state.get("user_role") == "senior" else "🧑‍🏫 Junior Teacher"
     st.markdown(f"👤 **{st.session_state.get('user_display_name', 'Teacher')}**")
     st.caption(f"Role: {role_badge}")
+
+    current_station = get_effective_computer_name()
+    with st.expander(f"💻 Workstation: **{current_station}**", expanded=False):
+        new_station_val = st.text_input(
+            "Computer / Station Name",
+            value=current_station,
+            key="input_sidebar_station_name",
+            placeholder="e.g. Bunsea's Mac, Front Desk PC, Lab 1",
+            help="This station name tags every exam you generate so other teachers know which computer made it."
+        ).strip()
+        if st.button("💾 Save Station Name", key="btn_save_station_name", use_container_width=True):
+            if new_station_val:
+                st.session_state["computer_name"] = new_station_val
+                if st.session_state.get("user_role") == "senior":
+                    st.session_state["user_display_name"] = f"Senior Teacher ({new_station_val})"
+                sync_computer_name_to_client(new_station_val)
+                st.toast(f"💻 Workstation saved: {new_station_val}")
+                time.sleep(0.3)
+                st.rerun()
 
     if st.session_state.get("user_role") == "junior":
         with st.expander("🔑 My Gemini API Key"):
@@ -3119,13 +3458,11 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
         models_to_try = [
             "gemini-3.8-flash",
             "gemini-3.6-flash",
-            "gemini-2.5-flash",
-            "gemini-2.0-flash",
         ]
         s_out = None
         q_count = int(exam.get("total_questions") or 0)
         for model_name in models_to_try:
-            cur_max = 8192 if ("2.0" in model_name or "2.5" in model_name) else MAX_OUTPUT_TOKENS
+            cur_max = MAX_OUTPUT_TOKENS
             tool_candidates = [[], [types.Tool(code_execution=types.ToolCodeExecution())]] if q_count >= 30 else [[types.Tool(code_execution=types.ToolCodeExecution())], []]
             for t_list in tool_candidates:
                 try:
@@ -3503,6 +3840,55 @@ uploaded_photos = st.file_uploader(
     type=["png", "jpg", "jpeg", "webp", "pdf"],
     accept_multiple_files=True,
 )
+
+if "pasted_photos" not in st.session_state or st.session_state.pasted_photos is None:
+    st.session_state["pasted_photos"] = []
+if "_last_handled_paste_id" not in st.session_state:
+    st.session_state["_last_handled_paste_id"] = None
+
+if _paste_component is not None:
+    pasted_payload = _paste_component(key="paste_photo_input")
+    if pasted_payload and isinstance(pasted_payload, dict):
+        p_id = pasted_payload.get("id")
+        if p_id and p_id != st.session_state.get("_last_handled_paste_id"):
+            st.session_state["_last_handled_paste_id"] = p_id
+            new_files = pasted_payload.get("files", [])
+            added_cnt = 0
+            for item in new_files:
+                try:
+                    data_str = item.get("data", "")
+                    if "," in data_str:
+                        _, b64_str = data_str.split(",", 1)
+                    else:
+                        b64_str = data_str
+                    raw_bytes = base64.b64decode(b64_str)
+                    p_num = len(st.session_state["pasted_photos"]) + 1
+                    fname = item.get("name") or f"Pasted Photo #{p_num}.png"
+                    st.session_state["pasted_photos"].append({
+                        "name": fname,
+                        "bytes": raw_bytes,
+                        "type": item.get("type", "image/png"),
+                    })
+                    added_cnt += 1
+                except Exception as _pe:
+                    _log_error("decode_pasted_photo", _pe)
+            if added_cnt > 0:
+                st.toast(f"📋 {added_cnt} pasted photo(s) attached!")
+                st.rerun()
+
+if st.session_state.get("pasted_photos"):
+    st.markdown(f"**📎 Attached Pasted Photos ({len(st.session_state['pasted_photos'])}):**")
+    p_cols = st.columns(min(len(st.session_state["pasted_photos"]), 4))
+    idx_to_remove = None
+    for p_idx, p_item in enumerate(st.session_state["pasted_photos"]):
+        target_col = p_cols[p_idx % len(p_cols)]
+        with target_col:
+            st.image(p_item["bytes"], caption=f"{p_item['name']} ({len(p_item['bytes']) // 1024} KB)", use_container_width=True)
+            if st.button("🗑️ Remove", key=f"btn_remove_paste_{p_idx}", use_container_width=True):
+                idx_to_remove = p_idx
+    if idx_to_remove is not None:
+        st.session_state["pasted_photos"].pop(idx_to_remove)
+        st.rerun()
 st.caption("⚠️ Use your own past worksheets, or describe the style you want — avoid pasting or uploading questions copied verbatim from copyrighted textbooks or commercial exam banks.")
 
 st.markdown("### 📊 Question Distribution")
@@ -3559,7 +3945,7 @@ _SS_KEYS = (
     "word_skip_reason", "compiler_log", "meta_topic", "meta_subject", "meta_year", "meta_diff",
     "meta_n", "meta_set", "cloud_saved", "display_topic", "meta_mc", "meta_easy", "meta_med",
     "meta_hard", "meta_xh", "meta_input_tokens", "meta_output_tokens", "meta_model_used",
-    "meta_total_cost", "meta_extra_instructions", "used_search", "phase_1_raw", "saved_ai_payload", "work_dir",
+    "meta_total_cost", "meta_ds_cost", "meta_extra_instructions", "used_search", "phase_1_raw", "saved_ai_payload", "work_dir",
     "saved_exam_id", "saved_has_solutions", "deepseek_audit",
 )
 for _key in _SS_KEYS:
@@ -3593,15 +3979,19 @@ with btn_col2:
         st.session_state["sel_topics_multi"] = []
         st.session_state["custom_topic_text"] = ""
         st.session_state["fallback_topic_text"] = ""
+        st.session_state["pasted_photos"] = []
+        st.session_state["_last_handled_paste_id"] = None
         st.rerun()
 
 if generate_btn:
     is_topic_empty = not topic or (isinstance(topic, str) and not topic.strip())
-    has_upload = bool(uploaded_photos) if isinstance(uploaded_photos, list) else (uploaded_photos is not None)
+    has_uploaded_photos = bool(uploaded_photos) if isinstance(uploaded_photos, list) else (uploaded_photos is not None)
+    has_pasted_photos = bool(st.session_state.get("pasted_photos"))
+    has_upload = has_uploaded_photos or has_pasted_photos
     if not year_group:
         st.error("🚨 Action Required: Please select at least one **Year** group from the dropdown above.")
     elif is_topic_empty and not has_upload:
-        st.error("🚨 Action Required: Please enter or select a **Topic**, or upload photo(s) for the AI to extract.")
+        st.error("🚨 Action Required: Please enter or select a **Topic**, or upload/paste photo(s) for the AI to extract.")
     elif total_q == 0:
         st.error("🚨 Action Required: Please select at least one question to generate.")
     else:
@@ -3618,10 +4008,11 @@ if generate_btn:
             clean_topic = "Topics from Attached Document"
         else:
             topic_list = topic if isinstance(topic, list) else [topic]
-            clean_topic = ", ".join([re.sub(r"^\d+[\.\-]\s*", "", t).strip() for t in topic_list])
+            raw_t = ", ".join([re.sub(r"^\d+[\.\-]\s*", "", t).strip() for t in topic_list])
             if sub_topic:
                 safe_sub = sub_topic.replace("/", "-").replace("\\", "-")
-                clean_topic = f"{clean_topic} - {safe_sub}"
+                raw_t = f"{raw_t} - {safe_sub}"
+            clean_topic = clean_redundant_topic_prefix(raw_t, ", ".join(year_group), subject, actual_level) or raw_t
 
         grades_string = ", ".join(year_group)
         current_set_number = get_next_set_number_with_queue(
@@ -3629,7 +4020,7 @@ if generate_btn:
         )
         display_topic = f"{clean_topic} Set {current_set_number}"
 
-        # Detach uploaded files into pure in-memory bytes/dicts so worker threads can read them safely
+        # Detach uploaded and pasted files into pure in-memory bytes/dicts so worker threads can read them safely
         uploaded_files_data = []
         if uploaded_photos:
             photos_list = uploaded_photos if isinstance(uploaded_photos, list) else [uploaded_photos]
@@ -3639,6 +4030,12 @@ if generate_btn:
                     "bytes": photo.getvalue(),
                     "type": getattr(photo, "type", ""),
                 })
+        for p in st.session_state.get("pasted_photos", []):
+            uploaded_files_data.append({
+                "name": p["name"],
+                "bytes": p["bytes"],
+                "type": p["type"],
+            })
 
         job_params = {
             "api_key": api_key,
@@ -3666,6 +4063,7 @@ if generate_btn:
             "uploaded_files_data": uploaded_files_data,
             "use_live_search": (subject in ["Business Studies", "Legal Studies", "Science"] and use_live_search),
             "created_by": st.session_state.get("user_display_name", "Teacher"),
+            "computer_name": get_effective_computer_name(),
         }
 
         job_id = submit_exam_job(job_params, teacher_username=st.session_state.get("username", ""))
@@ -3762,31 +4160,19 @@ if st.session_state.questions_text:
     out_tok = st.session_state.meta_output_tokens or 0
     model_used = st.session_state.meta_model_used or "Unknown"
 
-    model_lower = model_used.lower()
-    if "3.8-flash" in model_lower or "3.7-flash" in model_lower or "3.6-flash" in model_lower:
-        in_cost = (in_tok / 1_000_000) * 0.75
-        out_cost = (out_tok / 1_000_000) * 3.75
-    elif "flash-lite" in model_lower:
-        in_cost = (in_tok / 1_000_000) * 0.10
-        out_cost = (out_tok / 1_000_000) * 0.40
-    elif "2.5-flash" in model_lower or "3.5-flash" in model_lower or "flash" in model_lower:
-        in_cost = (in_tok / 1_000_000) * 0.30
-        out_cost = (out_tok / 1_000_000) * 2.50
-    elif "pro" in model_lower:
-        in_cost = (in_tok / 1_000_000) * 1.50
-        out_cost = (out_tok / 1_000_000) * 6.00
-    else:
-        in_cost = (in_tok / 1_000_000) * 0.75
-        out_cost = (out_tok / 1_000_000) * 3.75
-
+    # Pricing: Gemini 3.8 Flash ($0.75 / 1M in, $3.75 / 1M out) + Google Search ($0.014) + DeepSeek-R1 Auditor ($0.55 in, $2.19 out)
+    in_cost = (in_tok / 1_000_000) * 0.75
+    out_cost = (out_tok / 1_000_000) * 3.75
     search_cost = 0.014 if st.session_state.used_search else 0.00
-    total_cost = in_cost + out_cost + search_cost
+    ds_cost = float(st.session_state.get("meta_ds_cost") or 0.0)
+    total_cost = round(in_cost + out_cost + search_cost + ds_cost, 5)
     st.session_state["meta_total_cost"] = total_cost
 
     if st.session_state.get("admin_pin") == "DA_ADMIN":
         search_badge = " &nbsp;&nbsp;|&nbsp;&nbsp; 🌍 *Live Web Search*" if st.session_state.used_search else ""
-        st.caption(f"**💸 Generation Cost:** ${total_cost:.5f} &nbsp;&nbsp;|&nbsp;&nbsp; **Engine:** `{model_used}` &nbsp;&nbsp;|&nbsp;&nbsp; **Tokens:** {in_tok:,} In / {out_tok:,} Out{search_badge}")
-        st.caption("ℹ️ Per-token pricing above may drift from Google's current published rates — treat this as an estimate.")
+        ds_badge = f" &nbsp;&nbsp;|&nbsp;&nbsp; 🛡️ *DeepSeek Auditor (${ds_cost:.5f})*" if ds_cost > 0 else ""
+        st.caption(f"**💸 Generation Cost:** ${total_cost:.5f} &nbsp;&nbsp;|&nbsp;&nbsp; **Engine:** `{model_used}` &nbsp;&nbsp;|&nbsp;&nbsp; **Tokens:** {in_tok:,} In / {out_tok:,} Out{search_badge}{ds_badge}")
+        st.caption("ℹ️ Reflects official Gemini 3.8 Flash rates ($0.75/1M in, $3.75/1M out) + DeepSeek-R1 auditor rates ($0.55/1M in, $2.19/1M out).")
 
     if not st.session_state.solutions_text:
         st.info("💡 **Preview Ready!** The Worksheet and Answer Key have been drafted. You can download them now, or generate the step-by-step solutions to append to the document.")
@@ -3818,13 +4204,11 @@ if st.session_state.questions_text:
                     models_to_try = [
                         "gemini-3.8-flash",
                         "gemini-3.6-flash",
-                        "gemini-2.5-flash",
-                        "gemini-2.0-flash",
                     ]
                     s_out = None
                     last_error = None
                     for model_name in models_to_try:
-                        cur_max_tok = 8192 if ("2.0" in model_name or "2.5" in model_name) else MAX_OUTPUT_TOKENS
+                        cur_max_tok = MAX_OUTPUT_TOKENS
                         # For large batches (>=30 questions), prefer direct LLM generation first to prevent code execution sandbox timeouts
                         tool_candidates = [[], active_tools] if (total_q >= 30 or not active_tools) else [active_tools, []]
 
@@ -3911,7 +4295,7 @@ if st.session_state.questions_text:
                     cost=st.session_state.get("meta_total_cost"),
                     model=st.session_state.get("meta_model_used"),
                     extra_instructions=st.session_state.get("meta_extra_instructions", ""),
-                    created_by=st.session_state.get("user_display_name", "Senior Teacher"),
+                    created_by=f"{st.session_state.get('user_display_name', 'Senior Teacher')} ({get_effective_computer_name()})" if get_effective_computer_name() and get_effective_computer_name() not in st.session_state.get("user_display_name", "") else st.session_state.get("user_display_name", "Senior Teacher"),
                     has_solutions=bool(st.session_state.solutions_text),
                     questions_text=st.session_state.questions_text or "",
                     answers_text=st.session_state.answers_text or "",
@@ -3939,7 +4323,7 @@ if st.session_state.questions_text:
                         cost=st.session_state.get("meta_total_cost"),
                         model=st.session_state.get("meta_model_used"),
                         extra_instructions=st.session_state.get("meta_extra_instructions", ""),
-                        created_by=st.session_state.get("user_display_name", "Senior Teacher"),
+                        created_by=f"{st.session_state.get('user_display_name', 'Senior Teacher')} ({get_effective_computer_name()})" if get_effective_computer_name() and get_effective_computer_name() not in st.session_state.get("user_display_name", "") else st.session_state.get("user_display_name", "Senior Teacher"),
                         has_solutions=True,
                         questions_text=st.session_state.questions_text or "",
                         answers_text=st.session_state.answers_text or "",
@@ -4001,23 +4385,19 @@ if st.session_state.questions_text:
         import streamlit.components.v1 as components
         components.html(canvas_preview_html, height=850)
 
-    dist_parts = []
-    if st.session_state.meta_mc:
-        dist_parts.append(f"{st.session_state.meta_mc} MC")
-    if st.session_state.meta_easy:
-        dist_parts.append(f"{st.session_state.meta_easy} Easy")
-    if st.session_state.meta_med:
-        dist_parts.append(f"{st.session_state.meta_med} Med")
-    if st.session_state.meta_hard:
-        dist_parts.append(f"{st.session_state.meta_hard} Hard")
-    if st.session_state.meta_xh:
-        dist_parts.append(f"{st.session_state.meta_xh} Ext Hard")
-    dist_str = f" ({', '.join(dist_parts)})" if dist_parts else ""
-
-    yr_short = _y.replace("Year ", "Yr")
-    lvl_part = f" {_d}" if _d else ""
-    sol_suffix = " w sol" if st.session_state.solutions_text else ""
-    safe_name = f"{_t.replace('/', '_')} Set {_set}{sol_suffix}{dist_str} - {yr_short} {_s}{lvl_part}"
+    safe_name = build_exam_filename(
+        _t,
+        _y,
+        _s,
+        _d,
+        int(_set or 1),
+        has_solutions=bool(st.session_state.solutions_text),
+        num_mc=st.session_state.meta_mc or 0,
+        num_easy=st.session_state.meta_easy or 0,
+        num_med=st.session_state.meta_med or 0,
+        num_hard=st.session_state.meta_hard or 0,
+        num_xh=st.session_state.meta_xh or 0,
+    )
 
     dl1, dl2, dl3 = st.columns(3)
     with dl1:
