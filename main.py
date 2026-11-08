@@ -2414,7 +2414,11 @@ When instructed, your final combined output must follow this template structure 
         }
     except Exception as e:
         _log_error("generate_exam_worker", e)
-        return {"success": False, "error": str(e), "raw_error": e}
+        err_str = str(e)
+        if "402" in err_str or "prepayment credits are depleted" in err_str.lower():
+            friendly_msg = "Google Gemini API account balance is depleted ($0.00). Please top up credits or manage billing at https://ai.studio/projects to re-enable exam generation."
+            return {"success": False, "error": friendly_msg, "raw_error": e}
+        return {"success": False, "error": err_str, "raw_error": e}
 
 
 def submit_exam_job(params: dict, teacher_username: str = "") -> str:
