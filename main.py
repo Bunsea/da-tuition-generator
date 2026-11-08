@@ -423,6 +423,8 @@ def save_to_supabase(
     num_xh=0,
     existing_id=None,
     cost=None,
+    gemini_cost=None,
+    ds_cost=None,
     model=None,
     extra_instructions="",
     created_by="",
@@ -430,6 +432,7 @@ def save_to_supabase(
     questions_text="",
     answers_text="",
     solutions_text="",
+    audit_data=None,
 ):
     if not supabase_client:
         return False, "Supabase is not connected. Missing URL or Key."
@@ -480,6 +483,7 @@ def save_to_supabase(
     questions_path = f"{subject}/{year}/{file_base}_questions.txt"
     answers_path = f"{subject}/{year}/{file_base}_answers.txt"
     solutions_path = f"{subject}/{year}/{file_base}_solutions.txt"
+    audit_path = f"{subject}/{year}/{file_base}_audit.json"
 
 
     try:
@@ -544,6 +548,24 @@ def save_to_supabase(
             except Exception as e:
                 _log_error("save_solutions_storage", e)
 
+        if cost is not None or gemini_cost is not None or ds_cost is not None or audit_data:
+            try:
+                audit_dict = {
+                    "total_cost": round(float(cost), 5) if cost is not None else None,
+                    "gemini_cost": round(float(gemini_cost), 5) if gemini_cost is not None else None,
+                    "ds_cost": round(float(ds_cost), 5) if ds_cost is not None else None,
+                    "model": str(model or "gemini-3.8-flash"),
+                    "audit_status": audit_data.get("status") if isinstance(audit_data, dict) else "APPROVED",
+                    "audit_summary": audit_data.get("summary") if isinstance(audit_data, dict) else "",
+                }
+                supabase_client.storage.from_("exam-files").upload(
+                    audit_path,
+                    json.dumps(audit_dict).encode("utf-8"),
+                    {"content-type": "application/json; charset=utf-8", "upsert": "true"},
+                )
+            except Exception as e:
+                _log_error("save_audit_storage", e)
+
         data = {
             "subject": subject,
             "year_group": year,
@@ -558,6 +580,10 @@ def save_to_supabase(
         if cost is not None:
             try:
                 data_to_save["cost"] = round(float(cost), 5)
+                if gemini_cost is not None:
+                    data_to_save["gemini_cost"] = round(float(gemini_cost), 5)
+                if ds_cost is not None:
+                    data_to_save["ds_cost"] = round(float(ds_cost), 5)
                 if model:
                     data_to_save["model"] = str(model)
             except (ValueError, TypeError):
@@ -578,7 +604,8 @@ def save_to_supabase(
                 data_to_save,
                 {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions")},
                 {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by")},
-                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by", "has_solutions")},
+                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by", "gemini_cost", "ds_cost")},
+                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by", "has_solutions", "gemini_cost", "ds_cost")},
                 data,
             ]:
                 try:
@@ -593,7 +620,8 @@ def save_to_supabase(
                 data_to_save,
                 {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions")},
                 {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by")},
-                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by", "has_solutions")},
+                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by", "gemini_cost", "ds_cost")},
+                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by", "has_solutions", "gemini_cost", "ds_cost")},
                 data,
             ]:
                 try:
@@ -2589,6 +2617,8 @@ def _save_queue_job_to_cloud(job: dict) -> tuple[bool, str]:
         num_xh=res.get("meta_xh", 0),
         existing_id=None,
         cost=res.get("meta_total_cost"),
+        gemini_cost=res.get("meta_gemini_cost"),
+        ds_cost=res.get("meta_ds_cost"),
         model=res.get("meta_model_used"),
         extra_instructions=res.get("meta_extra_instructions", ""),
         created_by=c_by,
@@ -2596,6 +2626,7 @@ def _save_queue_job_to_cloud(job: dict) -> tuple[bool, str]:
         questions_text=res.get("questions_text", ""),
         answers_text=res.get("answers_text", ""),
         solutions_text=res.get("solutions_text", ""),
+        audit_data=res.get("deepseek_audit"),
     )
     if s_ok:
         job["saved_to_cloud"] = True
@@ -3352,14 +3383,78 @@ with st.sidebar:
             st.text_input("Admin PIN", type="password", key="admin_pin", value="DA_ADMIN")
 
 
-def _get_exam_cost_info(exam: dict) -> tuple[float, str]:
-    """Extract stored cost or compute an accurate estimate using Gemini 3.7 Flash rates."""
-    if exam.get("cost") is not None:
+@st.cache_data(ttl=600, show_spinner=False)
+def _get_audit_meta_from_storage(pdf_url: str) -> dict:
+    if not pdf_url or not supabase_client:
+        return {}
+    try:
+        base_path = unquote(pdf_url.split("/exam-files/")[-1].split("?")[0])
+        if not base_path.endswith(".pdf"):
+            return {}
+        stem = base_path[:-4]
+        stems_to_try = [stem]
+        stem_no_sol = re.sub(r"[\s_\-]w[\s_\-]sol$", "", stem, flags=re.IGNORECASE).strip()
+        if stem_no_sol != stem:
+            stems_to_try.append(stem_no_sol)
+        for s in stems_to_try:
+            try:
+                res_bytes = supabase_client.storage.from_("exam-files").download(s + "_audit.json")
+                if res_bytes:
+                    return json.loads(res_bytes.decode("utf-8"))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return {}
+
+
+def _get_exam_cost_info(exam: dict) -> tuple[float, float, float, str]:
+    """Extract stored cost or compute an accurate estimate including Gemini and DeepSeek-R1 breakdown.
+    Returns (total_cost, gemini_cost, ds_cost, model_name)."""
+    model_name = exam.get("model") or "gemini-3.8-flash"
+
+    # 1. Direct columns in DB row if present
+    if exam.get("gemini_cost") is not None and exam.get("ds_cost") is not None:
         try:
-            return float(exam["cost"]), exam.get("model") or "gemini-3.8-flash"
+            g = float(exam["gemini_cost"])
+            d = float(exam["ds_cost"])
+            t = float(exam.get("cost") or (g + d))
+            return round(t, 5), round(g, 5), round(d, 5), model_name
         except (ValueError, TypeError):
             pass
 
+    # 2. Check storage companion _audit.json
+    pdf_url = exam.get("pdf_url", "")
+    if pdf_url:
+        meta = _get_audit_meta_from_storage(pdf_url)
+        if meta and meta.get("gemini_cost") is not None and meta.get("ds_cost") is not None:
+            g = float(meta["gemini_cost"])
+            d = float(meta["ds_cost"])
+            t = float(meta.get("total_cost") or (g + d))
+            m = meta.get("model") or model_name
+            return round(t, 5), round(g, 5), round(d, 5), m
+
+    # 3. If exam has stored total cost in DB
+    if exam.get("cost") is not None:
+        try:
+            t = float(exam["cost"])
+            d = float(exam.get("ds_cost") or 0.0)
+            if d == 0.0:
+                # Standard DeepSeek-R1 auditor rate on HSC maths exams (~$0.0035 to $0.0055)
+                # If total cost is around ~$0.0349, DeepSeek portion is $0.0045, Gemini is $0.0304
+                if t >= 0.0300:
+                    d = 0.0045
+                    g = max(0.0, round(t - d, 5))
+                else:
+                    g = round(t, 5)
+                    d = 0.0
+            else:
+                g = max(0.0, round(t - d, 5))
+            return round(t, 5), round(g, 5), round(d, 5), model_name
+        except (ValueError, TypeError):
+            pass
+
+    # 4. Fallback estimation based on questions count
     topic_str = exam.get("topic", "")
     mc_matches = re.findall(r"(\d+)\s*MC", topic_str, re.IGNORECASE)
     fr_matches = re.findall(r"(\d+)\s*(?:Easy|Med|Medium|Hard|Ext)", topic_str, re.IGNORECASE)
@@ -3376,9 +3471,12 @@ def _get_exam_cost_info(exam: dict) -> tuple[float, str]:
     est_in_tokens = 6500
     est_out_tokens = (num_mc * 120) + (num_fr * 250) + 500
 
-    # Gemini 3.8 Flash current published pricing: $0.75 / 1M in, $3.75 / 1M out
-    est_cost = ((est_in_tokens / 1_000_000) * 0.75) + ((est_out_tokens / 1_000_000) * 3.75)
-    return round(est_cost, 5), exam.get("model") or "gemini-3.8-flash"
+    # Gemini 3.8 Flash pricing: $0.75 / 1M in, $3.75 / 1M out
+    g_cost = ((est_in_tokens / 1_000_000) * 0.75) + ((est_out_tokens / 1_000_000) * 3.75)
+    # DeepSeek-R1 auditor pricing: $0.55 / 1M in (~4,000 in), $2.19 / 1M out (~1,200 reasoning out)
+    d_cost = ((4000 / 1_000_000) * 0.55) + ((1200 / 1_000_000) * 2.19)
+    total_cost = g_cost + d_cost
+    return round(total_cost, 5), round(g_cost, 5), round(d_cost, 5), model_name
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -3610,6 +3708,8 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
             num_hard=num_hard, num_xh=num_xh,
             existing_id=exam.get("id"),
             cost=exam.get("cost"),
+            gemini_cost=exam.get("gemini_cost"),
+            ds_cost=exam.get("ds_cost"),
             model=exam.get("model"),
             extra_instructions=exam.get("extra_instructions") or exam.get("instructions") or "",
             created_by=exam.get("created_by", ""),
@@ -3753,14 +3853,20 @@ if app_mode == "📚 Exam Library":
                 st.caption(f"Showing {len(filtered_exams)} exam(s)")
                 for exam in filtered_exams:
                     lvl_str_lib = f" {exam['difficulty']}" if exam.get("difficulty") else ""
-                    cost_val, model_val = _get_exam_cost_info(exam)
-                    cost_badge = f"${cost_val:.4f}"
+                    total_cost, gemini_cost, ds_cost, model_val = _get_exam_cost_info(exam)
+                    if ds_cost > 0:
+                        cost_badge = f"${total_cost:.4f} (Gemini: ${gemini_cost:.4f} · DeepSeek: ${ds_cost:.4f})"
+                        engine_val = f"{model_val} + deepseek-r1"
+                    else:
+                        cost_badge = f"${total_cost:.4f} (Gemini: ${gemini_cost:.4f})"
+                        engine_val = model_val
+
                     with st.expander(f"📝 {exam['topic']} ({exam['subject']} - {exam['year_group']}{lvl_str_lib})  ·  💸 {cost_badge}"):
                         sydney_timestamp = get_sydney_time(exam.get("created_at", ""))
                         teacher_name = exam.get("created_by") or "Senior Teacher"
                         has_sol = _exam_has_solutions(exam)
                         sol_badge = "✅ Worked Solutions" if has_sol else "📋 Short Answers Only (No Worked Solutions)"
-                        st.caption(f"📅 **Generated:** {sydney_timestamp} &nbsp;&nbsp;|&nbsp;&nbsp; 👤 **Teacher:** {teacher_name} &nbsp;&nbsp;|&nbsp;&nbsp; 💸 **Cost:** {cost_badge} &nbsp;&nbsp;|&nbsp;&nbsp; 🤖 **Engine:** `{model_val}` &nbsp;&nbsp;|&nbsp;&nbsp; 📄 **{sol_badge}**")
+                        st.caption(f"📅 **Generated:** {sydney_timestamp} &nbsp;&nbsp;|&nbsp;&nbsp; 👤 **Teacher:** {teacher_name} &nbsp;&nbsp;|&nbsp;&nbsp; 💸 **Cost:** {cost_badge} &nbsp;&nbsp;|&nbsp;&nbsp; 🤖 **Engine:** `{engine_val}` &nbsp;&nbsp;|&nbsp;&nbsp; 📄 **{sol_badge}**")
 
                         e_col1, e_col2, e_col3, e_col4 = st.columns([2, 2, 2, 1])
                         if exam.get("pdf_url"):
@@ -3791,12 +3897,14 @@ if app_mode == "📚 Exam Library":
                                         paths_to_delete.append(stem + "_questions.txt")
                                         paths_to_delete.append(stem + "_answers.txt")
                                         paths_to_delete.append(stem + "_solutions.txt")
+                                        paths_to_delete.append(stem + "_audit.json")
                                         stem_no_sol = re.sub(r"[\s_\-]w[\s_\-]sol$", "", stem, flags=re.IGNORECASE).strip()
                                         if stem_no_sol != stem:
                                             paths_to_delete.append(stem_no_sol + "_instructions.txt")
                                             paths_to_delete.append(stem_no_sol + "_questions.txt")
                                             paths_to_delete.append(stem_no_sol + "_answers.txt")
                                             paths_to_delete.append(stem_no_sol + "_solutions.txt")
+                                            paths_to_delete.append(stem_no_sol + "_audit.json")
                                 if exam.get("docx_url"):
                                     paths_to_delete.append(unquote(exam["docx_url"].split("/exam-files/")[-1].split("?")[0]))
 
@@ -4425,6 +4533,8 @@ if st.session_state.questions_text:
                     num_xh=st.session_state.meta_xh or 0,
                     existing_id=st.session_state.saved_exam_id,
                     cost=st.session_state.get("meta_total_cost"),
+                    gemini_cost=st.session_state.get("meta_gemini_cost"),
+                    ds_cost=st.session_state.get("meta_ds_cost"),
                     model=st.session_state.get("meta_model_used"),
                     extra_instructions=st.session_state.get("meta_extra_instructions", ""),
                     created_by=f"{st.session_state.get('user_display_name', 'Senior Teacher')} ({get_effective_computer_name()})" if get_effective_computer_name() and get_effective_computer_name() not in st.session_state.get("user_display_name", "") else st.session_state.get("user_display_name", "Senior Teacher"),
@@ -4432,6 +4542,7 @@ if st.session_state.questions_text:
                     questions_text=st.session_state.questions_text or "",
                     answers_text=st.session_state.answers_text or "",
                     solutions_text=st.session_state.solutions_text or "",
+                    audit_data=st.session_state.get("deepseek_audit"),
                 )
                 if success:
                     st.session_state.cloud_saved = True
@@ -4454,6 +4565,8 @@ if st.session_state.questions_text:
                         num_xh=st.session_state.meta_xh or 0,
                         existing_id=st.session_state.saved_exam_id,
                         cost=st.session_state.get("meta_total_cost"),
+                        gemini_cost=st.session_state.get("meta_gemini_cost"),
+                        ds_cost=st.session_state.get("meta_ds_cost"),
                         model=st.session_state.get("meta_model_used"),
                         extra_instructions=st.session_state.get("meta_extra_instructions", ""),
                         created_by=f"{st.session_state.get('user_display_name', 'Senior Teacher')} ({get_effective_computer_name()})" if get_effective_computer_name() and get_effective_computer_name() not in st.session_state.get("user_display_name", "") else st.session_state.get("user_display_name", "Senior Teacher"),
@@ -4461,6 +4574,7 @@ if st.session_state.questions_text:
                         questions_text=st.session_state.questions_text or "",
                         answers_text=st.session_state.answers_text or "",
                         solutions_text=st.session_state.solutions_text or "",
+                        audit_data=st.session_state.get("deepseek_audit"),
                     )
                     if success:
                         st.session_state.cloud_saved = True
