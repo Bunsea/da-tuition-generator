@@ -2382,8 +2382,9 @@ When instructed, your final combined output must follow this template structure 
         in_cost = (in_tok / 1_000_000) * 0.75
         out_cost = (out_tok / 1_000_000) * 3.75
         search_cost = 0.014 if used_search else 0.00
-        ds_cost = audit_res.get("ds_cost", 0.0) if audit_res else 0.0
-        total_cost = round(in_cost + out_cost + search_cost + ds_cost, 5)
+        gemini_cost = round(in_cost + out_cost + search_cost, 5)
+        ds_cost = round(float(audit_res.get("ds_cost", 0.0) if audit_res else 0.0), 5)
+        total_cost = round(gemini_cost + ds_cost, 5)
 
         return {
             "success": True,
@@ -2416,6 +2417,7 @@ When instructed, your final combined output must follow this template structure 
             "meta_input_tokens": in_tok,
             "meta_output_tokens": out_tok,
             "meta_total_cost": total_cost,
+            "meta_gemini_cost": gemini_cost,
             "meta_ds_cost": ds_cost,
             "used_search": used_search,
             "phase_1_raw": out,
@@ -2540,6 +2542,7 @@ def _load_job_into_session_state(res: dict):
         "meta_input_tokens": res.get("meta_input_tokens", 0),
         "meta_output_tokens": res.get("meta_output_tokens", 0),
         "meta_total_cost": res.get("meta_total_cost", 0.0),
+        "meta_gemini_cost": res.get("meta_gemini_cost", 0.0),
         "meta_ds_cost": res.get("meta_ds_cost", 0.0),
         "used_search": res.get("used_search", False),
         "phase_1_raw": res.get("phase_1_raw", ""),
@@ -2679,9 +2682,18 @@ def render_exam_queue_dashboard():
         cost_val = res_data.get("meta_total_cost") if res_data.get("meta_total_cost") is not None else job.get("cost")
         if cost_val is not None:
             try:
-                meta_line += f" · 💸 ${float(cost_val):.4f}"
+                g_cost = res_data.get("meta_gemini_cost")
+                d_cost = float(res_data.get("meta_ds_cost") or 0.0)
+                if g_cost is None:
+                    g_cost = max(0.0, float(cost_val) - d_cost)
+                else:
+                    g_cost = float(g_cost)
+                if d_cost > 0:
+                    meta_line += f" · 💸 ${float(cost_val):.4f} (Gemini: ${g_cost:.4f} · DeepSeek: ${d_cost:.4f})"
+                else:
+                    meta_line += f" · 💸 ${float(cost_val):.4f} (Gemini: ${g_cost:.4f})"
             except Exception:
-                pass
+                meta_line += f" · 💸 ${float(cost_val):.4f}"
 
         try:
             card_container = st.container(border=True)
@@ -3982,7 +3994,7 @@ _SS_KEYS = (
     "word_skip_reason", "compiler_log", "meta_topic", "meta_subject", "meta_year", "meta_diff",
     "meta_n", "meta_set", "cloud_saved", "display_topic", "meta_mc", "meta_easy", "meta_med",
     "meta_hard", "meta_xh", "meta_input_tokens", "meta_output_tokens", "meta_model_used",
-    "meta_total_cost", "meta_ds_cost", "meta_extra_instructions", "used_search", "phase_1_raw", "saved_ai_payload", "work_dir",
+    "meta_total_cost", "meta_gemini_cost", "meta_ds_cost", "meta_extra_instructions", "used_search", "phase_1_raw", "saved_ai_payload", "work_dir",
     "saved_exam_id", "saved_has_solutions", "deepseek_audit",
 )
 for _key in _SS_KEYS:
@@ -4201,14 +4213,19 @@ if st.session_state.questions_text:
     in_cost = (in_tok / 1_000_000) * 0.75
     out_cost = (out_tok / 1_000_000) * 3.75
     search_cost = 0.014 if st.session_state.used_search else 0.00
+    gemini_cost = round(in_cost + out_cost + search_cost, 5)
     ds_cost = float(st.session_state.get("meta_ds_cost") or 0.0)
-    total_cost = round(in_cost + out_cost + search_cost + ds_cost, 5)
+    total_cost = round(gemini_cost + ds_cost, 5)
+    st.session_state["meta_gemini_cost"] = gemini_cost
     st.session_state["meta_total_cost"] = total_cost
 
     if st.session_state.get("admin_pin") == "DA_ADMIN":
         search_badge = " &nbsp;&nbsp;|&nbsp;&nbsp; 🌍 *Live Web Search*" if st.session_state.used_search else ""
-        ds_badge = f" &nbsp;&nbsp;|&nbsp;&nbsp; 🛡️ *DeepSeek Auditor (${ds_cost:.5f})*" if ds_cost > 0 else ""
-        st.caption(f"**💸 Generation Cost:** ${total_cost:.5f} &nbsp;&nbsp;|&nbsp;&nbsp; **Engine:** `{model_used}` &nbsp;&nbsp;|&nbsp;&nbsp; **Tokens:** {in_tok:,} In / {out_tok:,} Out{search_badge}{ds_badge}")
+        if ds_cost > 0:
+            split_info = f" (🤖 Gemini: ${gemini_cost:.4f} &nbsp;|&nbsp; 🛡️ DeepSeek Auditor: ${ds_cost:.4f})"
+        else:
+            split_info = f" (🤖 Gemini: ${gemini_cost:.4f})"
+        st.caption(f"**💸 Generation Cost:** ${total_cost:.5f}{split_info} &nbsp;&nbsp;|&nbsp;&nbsp; **Engine:** `{model_used}` &nbsp;&nbsp;|&nbsp;&nbsp; **Tokens:** {in_tok:,} In / {out_tok:,} Out{search_badge}")
         st.caption("ℹ️ Reflects official Gemini 3.8 Flash rates ($0.75/1M in, $3.75/1M out) + DeepSeek-R1 auditor rates ($0.55/1M in, $2.19/1M out).")
 
     if not st.session_state.solutions_text:
