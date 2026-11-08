@@ -3594,7 +3594,24 @@ if app_mode == "📚 Exam Library":
         else:
             all_exams = response.data
             available_subjects = ["All"] + sorted(list(set([ex["subject"] for ex in all_exams if ex.get("subject")])))
-            available_years = ["All"] + sorted(list(set([ex["year_group"] for ex in all_exams if ex.get("year_group")])))
+            
+            # Extract distinct individual year groups and sort them naturally (Year 7, Year 8, ... Year 12)
+            year_set = set()
+            for ex in all_exams:
+                yg = ex.get("year_group") or ""
+                matches = re.findall(r"Year\s*\d+", yg, flags=re.IGNORECASE)
+                if matches:
+                    for m in matches:
+                        y_num = re.search(r"\d+", m).group(0)
+                        year_set.add(f"Year {y_num}")
+                elif yg.strip():
+                    year_set.add(yg.strip())
+            
+            def _yg_sort_key(y_str):
+                m = re.search(r"\d+", str(y_str))
+                return (0, int(m.group(0))) if m else (1, str(y_str))
+                
+            available_years = ["All"] + sorted(list(year_set), key=_yg_sort_key)
 
             st.markdown("### 🔍 Search, Filter & Sort")
             
@@ -3611,7 +3628,11 @@ if app_mode == "📚 Exam Library":
             temp_filtered = [
                 ex for ex in all_exams
                 if (filter_subject == "All" or ex.get("subject") == filter_subject)
-                and (filter_year == "All" or ex.get("year_group") == filter_year)
+                and (
+                    filter_year == "All"
+                    or filter_year.lower() in ex.get("year_group", "").lower()
+                    or ex.get("year_group") == filter_year
+                )
                 and (not search_query or search_query.lower() in ex.get("topic", "").lower() or search_query.lower() in ex.get("subject", "").lower())
             ]
             
