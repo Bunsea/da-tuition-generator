@@ -1630,13 +1630,16 @@ def audit_exam_with_deepseek(
         "   - Is every question mathematically unambiguous, well-formed, and completely solvable?\n"
         "   - Are all numerical values and geometric conditions consistent (no unintended real-number domain violations like negative square roots, division by zero, or degenerate triangles)?\n"
         "   - Are the provided answers in the answer key mathematically verified and accurate?\n"
-        "2. POST-2019 NESA SYLLABUS BOUNDARY COMPLIANCE:\n"
+        "2. POST-2019 NESA SYLLABUS BOUNDARY COMPLIANCE (CRITICAL):\n"
+        "   - Even for 'Hard' or 'Extremely Hard' questions, you must NEVER allow concepts, formulas, or techniques outside the official NSW HSC syllabus. If a question introduces university-level math, competition math tricks, or out-of-scope methods to increase difficulty, flag it for REVISION.\n"
         "   - Adhere strictly to the course syllabus boundaries:\n"
         "     * Universal bans: Pigeonhole Principle, internal/external division of an interval, and Euclidean circle geometry proofs are STRICTLY BANNED across ALL courses.\n"
         "     * Year 11 & 12 Mathematics Extension 1: Vector proofs (geometric proofs using vectors) are STRICTLY BANNED (they belong exclusively in Extension 2). The t-formulae (t = tan(x/2)) and product-to-sum identities are STRICTLY BANNED (Ext 2 only). 3D vectors ARE included.\n"
         "     * Year 11 & 12 Mathematics Advanced: 3D Trigonometry is STRICTLY BANNED (Ext 1 only). No vectors, no projectile motion, no complex numbers, no induction.\n"
         "     * Year 11 vs Year 12 boundaries: Discrete random variables are Year 12 Advanced (banned in Year 11). Networks are Year 11 Standard (Year 12 Standard covers CPA).\n"
-        "3. QUESTION SPECIFICATIONS:\n"
+        "3. DIAGRAM INTEGRITY:\n"
+        "   - If any question refers to a figure, geometric shape, or diagram (e.g. 'In the diagram below', 'The figure shows'), verify that a valid rendered diagram (TikZ or Python graph) is present.\n"
+        "4. QUESTION SPECIFICATIONS:\n"
         "   - Verify that the draft aligns with the intended topic, level, and question count.\n\n"
         "OUTPUT FORMAT (STRICT DELIMITERS):\n"
         "===AUDIT_STATUS===\n"
@@ -1974,7 +1977,11 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
                         "(4) NO Pigeonhole Principle."
                     )
 
-            syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {actual_level} syllabus.{universal_ban}{level_ban}{yr_ban}"
+            syllabus_ban = (
+                f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {actual_level} syllabus.{universal_ban}{level_ban}{yr_ban}\n"
+                "CRITICAL DIFFICULTY BOUNDARY: NEVER include concepts, theorems, or techniques outside the official NSW HSC syllabus, even for Hard and Extremely Hard questions. "
+                "High difficulty MUST come from deep conceptual synthesis, multi-stage reasoning, and novel framing WITHIN the syllabus — NEVER from university mathematics, competition math tricks, or out-of-syllabus methods."
+            )
         else:
             syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {subject} syllabus. Ensure all diagrams, notations, reaction rates, equilibrium graphs, and scientific concepts follow official NSW HSC curriculum standards."
 
@@ -2053,6 +2060,8 @@ CRITICAL EXCEPTIONS:
 {auto_name_rule}
 
 DIAGRAM RULES (CRITICAL):
+- MANDATORY DIAGRAMS IN QUESTIONS: Whenever a question references a geometric figure, vector setup, 3D spatial arrangement, angle of elevation/depression, projectile trajectory, shaded area, network graph, or chart, you MUST render the accompanying diagram directly in the question using Native TikZ or the Python Graph Engine. NEVER refer to a diagram (e.g. "In the diagram below...", "The figure shows...") without actually generating the complete visual code for it!
+
 You have TWO graphing engines available. You MUST choose the correct one based on the diagram type.
 
 ENGINE 1: THE PYTHON ENGINE
@@ -2319,7 +2328,9 @@ When instructed, your final combined output must follow this template structure 
             _notify("🧠 Calculating deep step-by-step mathematical solutions...")
             p2_payload = ai_payload + [
                 out,
-                "\n\nPHASE 2 INSTRUCTION: Excellent. Now, generate the step-by-step fully worked solutions for these EXACT questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===. Group trivial algebra. Show all key mathematical steps. Never use \\tag inside $$ ... $$ or \\[ ... \\]; use \\qquad (1) if numbering equations.",
+                "\n\nPHASE 2 INSTRUCTION: Excellent. Now, generate the comprehensive step-by-step fully worked solutions for these EXACT questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===.\n"
+                "MANDATORY DIAGRAMS IN WORKED SOLUTIONS: You MUST ALWAYS include visual diagrams (using Native TikZ or the Python Graph Engine) in the fully worked solutions whenever a diagram helps the student visualize, follow, or understand the working out (e.g. geometric proofs, vector triangles/addition, coordinate geometry sketches, integration regions/areas between curves, sign diagrams, normal distribution shading, or 3D angles). Do NOT rely purely on text and algebra when a visual sketch aids understanding.\n"
+                "Group trivial algebra. Show all key mathematical steps and justifications. Never use \\tag inside $$ ... $$ or \\[ ... \\]; use \\qquad (1) if numbering equations.",
             ]
             s_out = None
             for s_model in models_to_try:
@@ -3441,6 +3452,7 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
             "Place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===.\n"
             "Rules:\n"
             "- Use LaTeX formatting (enumerate, align, etc.).\n"
+            "- MANDATORY DIAGRAMS IN SOLUTIONS: You MUST ALWAYS include visual diagrams (using Native TikZ or the Python Graph Engine) in the worked solutions whenever a diagram helps the student visualize, follow, or understand the working out (e.g. geometric proofs, vector addition/triangles, coordinate geometry sketches, integration regions/areas between curves, sign diagrams, normal distribution shading, or 3D angles). Do NOT rely purely on text and algebra when a visual sketch aids understanding.\n"
             "- Show all key mathematical steps.\n"
             "- Group trivial algebra.\n"
             "- Do NOT regenerate the questions or answers — only generate the solutions.\n"
@@ -4223,7 +4235,9 @@ if st.session_state.questions_text:
 
                     p2_payload = st.session_state.saved_ai_payload + [
                         st.session_state.phase_1_raw,
-                        "\n\nPHASE 2 INSTRUCTION: Excellent. Now, generate the step-by-step fully worked solutions for these EXACT questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===. Group trivial algebra. Show all key mathematical steps. Never use \\tag inside $$ ... $$ or \\[ ... \\]; use \\qquad (1) if numbering equations.",
+                        "\n\nPHASE 2 INSTRUCTION: Excellent. Now, generate the comprehensive step-by-step fully worked solutions for these EXACT questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===.\n"
+                        "MANDATORY DIAGRAMS IN WORKED SOLUTIONS: You MUST ALWAYS include visual diagrams (using Native TikZ or the Python Graph Engine) in the fully worked solutions whenever a diagram helps the student visualize, follow, or understand the working out (e.g. geometric proofs, vector triangles/addition, coordinate geometry sketches, integration regions/areas between curves, sign diagrams, normal distribution shading, or 3D angles). Do NOT rely purely on text and algebra when a visual sketch aids understanding.\n"
+                        "Group trivial algebra. Show all key mathematical steps and justifications. Never use \\tag inside $$ ... $$ or \\[ ... \\]; use \\qquad (1) if numbering equations.",
                     ]
 
                     models_to_try = [
