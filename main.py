@@ -3649,18 +3649,24 @@ if app_mode == "📚 Exam Library":
                 filter_year = st.selectbox("Year Group", available_years)
 
             # --- UPDATED FILTER LOGIC ---
+            sq = (search_query or "").strip().lower()
             temp_filtered = [
                 ex for ex in all_exams
                 if (filter_subject == "All" or ex.get("subject") == filter_subject)
                 and (
                     filter_year == "All"
-                    or filter_year.lower() in ex.get("year_group", "").lower()
-                    or ex.get("year_group") == filter_year
+                    or (filter_year.lower() in str(ex.get("year_group") or "").lower())
+                    or (ex.get("year_group") == filter_year)
                 )
-                and (not search_query or search_query.lower() in ex.get("topic", "").lower() or search_query.lower() in ex.get("subject", "").lower())
+                and (
+                    not sq
+                    or (sq in str(ex.get("topic") or "").lower())
+                    or (sq in str(ex.get("subject") or "").lower())
+                    or (sq in str(ex.get("difficulty") or "").lower())
+                )
             ]
             
-            available_topics = ["All"] + sorted(list(set([ex.get("topic", "").split(" (")[0] for ex in temp_filtered if ex.get("topic")])))
+            available_topics = ["All"] + sorted(list(set([str(ex.get("topic") or "").split(" (")[0] for ex in temp_filtered if ex.get("topic")])))
 
             with f_col3:
                 filter_topic = st.selectbox("Topic", available_topics)
@@ -3668,16 +3674,16 @@ if app_mode == "📚 Exam Library":
                 sort_option = st.selectbox("Sort By", ["Date Added (Newest)", "Date Added (Oldest)", "Name (A-Z)", "Name (Z-A)"])
             st.markdown("---")
 
-            filtered_exams = [ex for ex in temp_filtered if filter_topic == "All" or ex.get("topic", "").split(" (")[0] == filter_topic]
+            filtered_exams = [ex for ex in temp_filtered if filter_topic == "All" or str(ex.get("topic") or "").split(" (")[0] == filter_topic]
 
             if sort_option == "Date Added (Newest)":
-                filtered_exams.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+                filtered_exams.sort(key=lambda x: str(x.get("created_at") or ""), reverse=True)
             elif sort_option == "Date Added (Oldest)":
-                filtered_exams.sort(key=lambda x: x.get("created_at", ""))
+                filtered_exams.sort(key=lambda x: str(x.get("created_at") or ""))
             elif sort_option == "Name (A-Z)":
-                filtered_exams.sort(key=lambda x: x.get("topic", "").lower())
+                filtered_exams.sort(key=lambda x: str(x.get("topic") or "").lower())
             elif sort_option == "Name (Z-A)":
-                filtered_exams.sort(key=lambda x: x.get("topic", "").lower(), reverse=True)
+                filtered_exams.sort(key=lambda x: str(x.get("topic") or "").lower(), reverse=True)
 
             if not filtered_exams:
                 st.info("No exams match your current filters.")
