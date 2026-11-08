@@ -429,6 +429,7 @@ def save_to_supabase(
     has_solutions=False,
     questions_text="",
     answers_text="",
+    solutions_text="",
 ):
     if not supabase_client:
         return False, "Supabase is not connected. Missing URL or Key."
@@ -467,6 +468,7 @@ def save_to_supabase(
     yr_short = year.replace("Year ", "Yr")
     db_topic = f"{clean_t} ({yr_short}) Set {set_num}{dist_str}"
 
+    has_solutions = bool(has_solutions) or bool(solutions_text)
     file_base = build_exam_filename(
         clean_topic, year, subject, diff, set_num,
         has_solutions=has_solutions,
@@ -477,6 +479,7 @@ def save_to_supabase(
     instr_path = f"{subject}/{year}/{file_base}_instructions.txt"
     questions_path = f"{subject}/{year}/{file_base}_questions.txt"
     answers_path = f"{subject}/{year}/{file_base}_answers.txt"
+    solutions_path = f"{subject}/{year}/{file_base}_solutions.txt"
 
 
     try:
@@ -531,6 +534,15 @@ def save_to_supabase(
                 )
             except Exception as e:
                 _log_error("save_answers_storage", e)
+        if solutions_text:
+            try:
+                supabase_client.storage.from_("exam-files").upload(
+                    solutions_path,
+                    str(solutions_text).encode("utf-8"),
+                    {"content-type": "text/plain; charset=utf-8", "upsert": "true"},
+                )
+            except Exception as e:
+                _log_error("save_solutions_storage", e)
 
         data = {
             "subject": subject,
@@ -564,8 +576,9 @@ def save_to_supabase(
         def _execute_update(row_id):
             for payload in [
                 data_to_save,
-                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by", "has_solutions")},
+                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions")},
                 {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by")},
+                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by", "has_solutions")},
                 data,
             ]:
                 try:
@@ -578,8 +591,9 @@ def save_to_supabase(
         def _execute_insert():
             for payload in [
                 data_to_save,
-                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by", "has_solutions")},
+                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions")},
                 {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by")},
+                {k: v for k, v in data_to_save.items() if k not in ("extra_instructions", "instructions", "created_by", "has_solutions")},
                 data,
             ]:
                 try:
@@ -2578,9 +2592,10 @@ def _save_queue_job_to_cloud(job: dict) -> tuple[bool, str]:
         model=res.get("meta_model_used"),
         extra_instructions=res.get("meta_extra_instructions", ""),
         created_by=c_by,
-        has_solutions=bool(res.get("solutions_text")),
+        has_solutions=bool(res.get("solutions_text")) or bool(job.get("auto_solutions")),
         questions_text=res.get("questions_text", ""),
         answers_text=res.get("answers_text", ""),
+        solutions_text=res.get("solutions_text", ""),
     )
     if s_ok:
         job["saved_to_cloud"] = True
@@ -3428,18 +3443,28 @@ def _get_exam_content_from_storage(pdf_url: str) -> tuple[str, str]:
         if not base_path.endswith(".pdf"):
             return q_text, a_text
         stem = base_path[:-4]
-        try:
-            res_q = supabase_client.storage.from_("exam-files").download(stem + "_questions.txt")
-            if res_q:
-                q_text = res_q.decode("utf-8").strip()
-        except Exception:
-            pass
-        try:
-            res_a = supabase_client.storage.from_("exam-files").download(stem + "_answers.txt")
-            if res_a:
-                a_text = res_a.decode("utf-8").strip()
-        except Exception:
-            pass
+        stems_to_try = [stem]
+        stem_no_sol = re.sub(r"[\s_\-]w[\s_\-]sol$", "", stem, flags=re.IGNORECASE).strip()
+        if stem_no_sol != stem:
+            stems_to_try.append(stem_no_sol)
+
+        for s in stems_to_try:
+            if not q_text:
+                try:
+                    res_q = supabase_client.storage.from_("exam-files").download(s + "_questions.txt")
+                    if res_q:
+                        q_text = res_q.decode("utf-8").strip()
+                except Exception:
+                    pass
+            if not a_text:
+                try:
+                    res_a = supabase_client.storage.from_("exam-files").download(s + "_answers.txt")
+                    if res_a:
+                        a_text = res_a.decode("utf-8").strip()
+                except Exception:
+                    pass
+            if q_text and a_text:
+                break
     except Exception as e:
         _log_error("_get_exam_content_from_storage", e)
     return q_text, a_text
@@ -3591,6 +3616,7 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
             has_solutions=True,
             questions_text=q_text,
             answers_text=a_text,
+            solutions_text=s_sanitized,
         )
 
         if success:
@@ -3604,6 +3630,42 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
         return False, f"Solutions generated but failed to save: {save_result}"
     except Exception as e:
         return False, f"Error generating solutions: {str(e)}"
+
+
+def _exam_has_solutions(exam: dict) -> bool:
+    """Accurately checks whether an exam includes fully worked solutions from:
+    1. Direct DB boolean/string flag
+    2. 'w sol' or 'with solutions' indicator in the PDF URL
+    3. 'w sol' or 'with solutions' indicator in the Word document URL
+    4. Topic string containing 'w sol' or 'with solutions'
+    """
+    if not isinstance(exam, dict):
+        return False
+
+    # 1. Direct database boolean flag
+    val = exam.get("has_solutions")
+    if val is True or val == 1 or str(val).strip().lower() in ("true", "t", "1", "yes"):
+        return True
+
+    # 2. Check PDF and Docx URLs (e.g. "...Set11_10M-10H-10XH w sol.pdf")
+    pdf_u = unquote(str(exam.get("pdf_url") or "")).lower()
+    docx_u = unquote(str(exam.get("docx_url") or "")).lower()
+    for u in (pdf_u, docx_u):
+        if not u:
+            continue
+        if re.search(r"(?:[\s_\-]w[\s_\-]sol\b|with[\s_\-]solutions?|worked[\s_\-]solutions?)", u):
+            return True
+        if "w sol" in u or "w_sol" in u or "with_solutions" in u or "%20w%20sol" in u:
+            return True
+
+    # 3. Check topic title
+    topic = str(exam.get("topic") or "").lower()
+    if re.search(r"(?:[\s_\-\(]w[\s_\/]sol\b|with[\s_\-]solutions?|\(solutions\))", topic):
+        return True
+    if "w sol" in topic or "with solutions" in topic:
+        return True
+
+    return False
 
 
 if app_mode == "📚 Exam Library":
@@ -3696,8 +3758,8 @@ if app_mode == "📚 Exam Library":
                     with st.expander(f"📝 {exam['topic']} ({exam['subject']} - {exam['year_group']}{lvl_str_lib})  ·  💸 {cost_badge}"):
                         sydney_timestamp = get_sydney_time(exam.get("created_at", ""))
                         teacher_name = exam.get("created_by") or "Senior Teacher"
-                        has_sol = exam.get("has_solutions", False)
-                        sol_badge = "✅ With Solutions" if has_sol else "📋 No Solutions"
+                        has_sol = _exam_has_solutions(exam)
+                        sol_badge = "✅ Worked Solutions" if has_sol else "📋 Short Answers Only (No Worked Solutions)"
                         st.caption(f"📅 **Generated:** {sydney_timestamp} &nbsp;&nbsp;|&nbsp;&nbsp; 👤 **Teacher:** {teacher_name} &nbsp;&nbsp;|&nbsp;&nbsp; 💸 **Cost:** {cost_badge} &nbsp;&nbsp;|&nbsp;&nbsp; 🤖 **Engine:** `{model_val}` &nbsp;&nbsp;|&nbsp;&nbsp; 📄 **{sol_badge}**")
 
                         e_col1, e_col2, e_col3, e_col4 = st.columns([2, 2, 2, 1])
@@ -3724,9 +3786,17 @@ if app_mode == "📚 Exam Library":
                                     p_path = unquote(exam["pdf_url"].split("/exam-files/")[-1].split("?")[0])
                                     paths_to_delete.append(p_path)
                                     if p_path.endswith(".pdf"):
-                                        paths_to_delete.append(p_path[:-4] + "_instructions.txt")
-                                        paths_to_delete.append(p_path[:-4] + "_questions.txt")
-                                        paths_to_delete.append(p_path[:-4] + "_answers.txt")
+                                        stem = p_path[:-4]
+                                        paths_to_delete.append(stem + "_instructions.txt")
+                                        paths_to_delete.append(stem + "_questions.txt")
+                                        paths_to_delete.append(stem + "_answers.txt")
+                                        paths_to_delete.append(stem + "_solutions.txt")
+                                        stem_no_sol = re.sub(r"[\s_\-]w[\s_\-]sol$", "", stem, flags=re.IGNORECASE).strip()
+                                        if stem_no_sol != stem:
+                                            paths_to_delete.append(stem_no_sol + "_instructions.txt")
+                                            paths_to_delete.append(stem_no_sol + "_questions.txt")
+                                            paths_to_delete.append(stem_no_sol + "_answers.txt")
+                                            paths_to_delete.append(stem_no_sol + "_solutions.txt")
                                 if exam.get("docx_url"):
                                     paths_to_delete.append(unquote(exam["docx_url"].split("/exam-files/")[-1].split("?")[0]))
 
@@ -4361,6 +4431,7 @@ if st.session_state.questions_text:
                     has_solutions=bool(st.session_state.solutions_text),
                     questions_text=st.session_state.questions_text or "",
                     answers_text=st.session_state.answers_text or "",
+                    solutions_text=st.session_state.solutions_text or "",
                 )
                 if success:
                     st.session_state.cloud_saved = True
@@ -4389,6 +4460,7 @@ if st.session_state.questions_text:
                         has_solutions=True,
                         questions_text=st.session_state.questions_text or "",
                         answers_text=st.session_state.answers_text or "",
+                        solutions_text=st.session_state.solutions_text or "",
                     )
                     if success:
                         st.session_state.cloud_saved = True
