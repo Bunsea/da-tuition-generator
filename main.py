@@ -336,6 +336,8 @@ def clean_redundant_topic_prefix(topic_str: str, year: str = "", subject: str = 
     if not topic_str:
         return ""
     s = str(topic_str).replace("_", " ").strip()
+    s = re.sub(r"^\[Year\s*\d+\]\s*", "", s, flags=re.IGNORECASE).strip()
+    s = re.sub(r"\s*\((?:Yr|Year)\s*\d+\)$", "", s, flags=re.IGNORECASE).strip()
     s = re.sub(r"^\d+[\.\-]\s*", "", s).strip()
     s = re.sub(r"^(?:NESA\s*(?:Syllabus)?[\s\-_:]*)+", "", s, flags=re.IGNORECASE).strip()
 
@@ -675,11 +677,35 @@ def save_to_supabase(
 
 
 # ── DYNAMIC FILE ENGINE ─────────────────────────────────────────────────────────
+LEVEL_NAMES = {"Advanced", "Extension", "Extension 1", "Extension 2", "Standard", "EALD"}
+
+
+def resolve_level_for_year(year: str, subject: str, level: str) -> list[str]:
+    """Returns candidate level names for a specific year and subject (e.g. mapping Extension <-> Extension 1)."""
+    if not level or level == "N/A":
+        return [""]
+    if subject == "Maths":
+        if level in ("Extension", "Extension 1"):
+            if year == "Year 11":
+                return ["Extension", "Extension 1"]
+            elif year == "Year 12":
+                return ["Extension 1", "Extension"]
+            return [level]
+        elif level == "Extension 2":
+            if year == "Year 11":
+                return ["Extension", "Extension 1"]
+            return ["Extension 2"]
+    return [level]
+
+
 def get_parent_path(year: str, subject: str, difficulty: str) -> str:
     if difficulty:
-        diff_path = os.path.join(SAMPLES_DIR, year, subject, difficulty)
-        if os.path.exists(diff_path):
-            return diff_path
+        candidates = resolve_level_for_year(year, subject, difficulty)
+        for cand in candidates:
+            if cand:
+                diff_path = os.path.join(SAMPLES_DIR, year, subject, cand)
+                if os.path.exists(diff_path):
+                    return diff_path
     sub_path = os.path.join(SAMPLES_DIR, year, subject)
     return sub_path
 
@@ -688,7 +714,8 @@ def get_available_topics(parent_path: str) -> list:
     if not os.path.exists(parent_path):
         return []
     topics = [d for d in os.listdir(parent_path) if os.path.isdir(os.path.join(parent_path, d))]
-    return sorted(topics)
+    real_topics = [d for d in topics if d not in LEVEL_NAMES]
+    return sorted(real_topics)
 
 
 def _read_files_in_dir(directory: str) -> list:
@@ -718,7 +745,17 @@ def _read_files_in_dir(directory: str) -> list:
 @st.cache_data
 def load_style_samples(year: str, subject: str, difficulty: str, topic: str) -> tuple:
     parent_path = get_parent_path(year, subject, difficulty)
-    topic_path = os.path.join(parent_path, topic) if topic else ""
+    topic_clean = re.sub(r"^\[Year\s*\d+\]\s*", "", topic, flags=re.IGNORECASE).strip() if topic else ""
+    topic_clean = re.sub(r"\s*\((?:Yr|Year)\s*\d+\)$", "", topic_clean, flags=re.IGNORECASE).strip() if topic_clean else ""
+    topic_path = os.path.join(parent_path, topic_clean) if topic_clean else ""
+
+    if not (topic_path and os.path.exists(topic_path)) and os.path.exists(parent_path) and topic_clean:
+        norm_t = re.sub(r"^\d+[\.\-]\s*", "", topic_clean).strip().lower()
+        for d in os.listdir(parent_path):
+            if os.path.isdir(os.path.join(parent_path, d)) and d not in LEVEL_NAMES:
+                if re.sub(r"^\d+[\.\-]\s*", "", d).strip().lower() == norm_t:
+                    topic_path = os.path.join(parent_path, d)
+                    break
 
     samples = []
     source_msg = ""
@@ -2027,29 +2064,36 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
         else:
             syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {subject} syllabus. Ensure all diagrams, notations, reaction rates, equilibrium graphs, and scientific concepts follow official NSW HSC curriculum standards."
 
-        # Manifest grounding
+        # Manifest grounding across all selected years
         manifest_data = load_syllabus_manifest()
-        matched_course = None
+        matched_courses = []
         for y in year_group:
-            candidate_keys = [f"{y} {subject} {actual_level}".strip(), f"{y} {subject}".strip()]
-            for ck in candidate_keys:
-                if ck in manifest_data:
-                    matched_course = manifest_data[ck]
+            lvl_cands = resolve_level_for_year(y, subject, actual_level)
+            course_for_y = None
+            for cand in lvl_cands:
+                cand_keys = [f"{y} {subject} {cand}".strip(), f"{y} {subject}".strip()]
+                for ck in cand_keys:
+                    if ck in manifest_data:
+                        course_for_y = manifest_data[ck]
+                        break
+                if course_for_y:
                     break
-            if matched_course:
-                break
+            if course_for_y and course_for_y not in matched_courses:
+                matched_courses.append(course_for_y)
 
-        if matched_course:
-            textbook_ref = matched_course.get("textbook", "")
-            ch_list = [f"- Chapter {c['num']}: {c['name']} (Subtopics: {', '.join(c.get('subtopics', []))})" for c in matched_course.get("chapters", [])]
-            inclusions = matched_course.get("inclusions", [])
-            exclusions = matched_course.get("exclusions", [])
-            manifest_context = f"\n\nOFFICIAL SYLLABUS TEXTBOOK BENCHMARK ({textbook_ref}):\n"
-            manifest_context += "The following are the authoritative chapters and granular subtopics for this course:\n" + "\n".join(ch_list) + "\n"
-            if inclusions:
-                manifest_context += "\nMANDATORY INCLUSIONS:\n" + "\n".join([f"• {inc}" for inc in inclusions]) + "\n"
-            if exclusions:
-                manifest_context += "\nSTRICT EXCLUSIONS & BANS:\n" + "\n".join([f"• {exc}" for exc in exclusions]) + "\n"
+        if matched_courses:
+            manifest_context = ""
+            for matched_course in matched_courses:
+                textbook_ref = matched_course.get("textbook", "")
+                ch_list = [f"- Chapter {c['num']}: {c['name']} (Subtopics: {', '.join(c.get('subtopics', []))})" for c in matched_course.get("chapters", [])]
+                inclusions = matched_course.get("inclusions", [])
+                exclusions = matched_course.get("exclusions", [])
+                manifest_context += f"\n\nOFFICIAL SYLLABUS TEXTBOOK BENCHMARK ({textbook_ref}):\n"
+                manifest_context += "The following are the authoritative chapters and granular subtopics for this course:\n" + "\n".join(ch_list) + "\n"
+                if inclusions:
+                    manifest_context += "\nMANDATORY INCLUSIONS:\n" + "\n".join([f"• {inc}" for inc in inclusions]) + "\n"
+                if exclusions:
+                    manifest_context += "\nSTRICT EXCLUSIONS & BANS:\n" + "\n".join([f"• {exc}" for exc in exclusions]) + "\n"
             syllabus_ban += manifest_context
 
         dist_req = []
@@ -2905,6 +2949,47 @@ st.markdown(
             overflow: hidden !important;
             text-overflow: ellipsis !important;
         }
+        /* Layout for topic dropdown options: topic name left, Yr label right */
+        .da-topic-flex-row,
+        div[data-baseweb="popover"] li[role="option"] > div.da-topic-flex-row,
+        div[data-baseweb="popover"] li[role="option"] .da-topic-flex-row {
+            display: flex !important;
+            justify-content: space-between !important;
+            align-items: center !important;
+            width: 100% !important;
+            min-width: 0 !important;
+            overflow: visible !important;
+        }
+        .da-topic-text-left {
+            flex: 1 1 auto !important;
+            min-width: 0 !important;
+            text-align: left !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+        }
+        .da-topic-yr-right {
+            flex: 0 0 auto !important;
+            margin-left: 14px !important;
+            text-align: right !important;
+            white-space: nowrap !important;
+            font-size: 13px !important;
+            font-weight: 600 !important;
+            color: #475569 !important;
+            background-color: #f1f5f9 !important;
+            border: 1px solid #e2e8f0 !important;
+            padding: 1px 7px !important;
+            border-radius: 6px !important;
+            letter-spacing: 0.3px !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
+        }
+        div[data-baseweb="popover"] [role="option"]:hover .da-topic-yr-right,
+        ul[role="listbox"] li:hover .da-topic-yr-right {
+            background-color: #e2e8f0 !important;
+            color: #1e293b !important;
+            border-color: #cbd5e1 !important;
+        }
         div[data-baseweb="popover"] [role="option"]:hover,
         ul[role="listbox"] li:hover {
             background-color: #f0f4f9 !important;
@@ -2991,7 +3076,60 @@ components.html(
                 parentDoc.body.appendChild(tooltip);
             }
 
+            // Automatically split topic name (left) and year label (right) inside dropdown popovers
+            function formatTopicOptions() {
+                try {
+                    const popovers = parentDoc.querySelectorAll('div[data-baseweb="popover"], [data-testid="stSelectboxVirtualDropdown"]');
+                    if (!popovers.length) return;
+
+                    popovers.forEach(function(popover) {
+                        const options = popover.querySelectorAll('li[role="option"], div[role="option"]');
+                        options.forEach(function(opt) {
+                            if (opt.getAttribute('data-da-yr-aligned')) return;
+
+                            const fullText = (opt.textContent || '').trim();
+                            const match = fullText.match(/^(.*?)\s*(\((?:Yr|Year)\s*\d+\))$/i);
+                            if (match) {
+                                opt.setAttribute('data-da-yr-aligned', 'true');
+                                const topicTitle = match[1].trim();
+                                const yrBadge = match[2].trim();
+
+                                if (!opt.getAttribute('title')) {
+                                    opt.setAttribute('title', fullText);
+                                }
+
+                                const safeTitle = topicTitle.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                                const safeBadge = yrBadge.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+                                let target = opt.querySelector('div') || opt;
+                                const children = opt.querySelectorAll('div, span');
+                                for (let i = children.length - 1; i >= 0; i--) {
+                                    const c = children[i];
+                                    if (c.children.length === 0 && /\((?:Yr|Year)\s*\d+\)$/i.test((c.textContent || '').trim())) {
+                                        target = c;
+                                        break;
+                                    }
+                                }
+
+                                target.innerHTML = '<span class="da-topic-text-left">' + safeTitle + '</span><span class="da-topic-yr-right">' + safeBadge + '</span>';
+                                target.classList.add('da-topic-flex-row');
+                            }
+                        });
+                    });
+                } catch(e) {}
+            }
+
+            const daObserver = new MutationObserver(function() {
+                formatTopicOptions();
+            });
+            daObserver.observe(parentDoc.body, { childList: true, subtree: true });
+
+            parentDoc.addEventListener('scroll', function() {
+                formatTopicOptions();
+            }, true);
+
             parentDoc.addEventListener('mouseover', function(e) {
+                formatTopicOptions();
                 const opt = e.target.closest('[role="option"], div[data-baseweb="popover"] li, ul[role="listbox"] li, div[data-baseweb="menu"] li');
                 if (opt) {
                     const text = (opt.innerText || opt.textContent || '').trim();
@@ -3042,6 +3180,7 @@ components.html(
             }, true);
 
             parentDoc.addEventListener('click', function() {
+                setTimeout(formatTopicOptions, 50);
                 if (tooltip) {
                     tooltip.style.opacity = '0';
                     tooltip.style.display = 'none';
@@ -3991,12 +4130,16 @@ with c2:
 
 with c3:
     level_disabled = False
-    if subject == "Maths" and "Year 11" in year_group:
-        level_opts = ["Standard", "Advanced", "Extension"]
-    elif subject == "Maths" and "Year 12" in year_group:
-        level_opts = ["Standard", "Advanced", "Extension 1", "Extension 2"]
-    elif subject == "Maths" and "Year 9" in year_group:
-        level_opts = ["Advanced", "Standard"]
+    if subject == "Maths":
+        if "Year 12" in year_group:
+            level_opts = ["Standard", "Advanced", "Extension 1", "Extension 2"]
+        elif "Year 11" in year_group:
+            level_opts = ["Standard", "Advanced", "Extension 1"]
+        elif "Year 9" in year_group or "Year 10" in year_group:
+            level_opts = ["Advanced", "Standard"]
+        else:
+            level_opts = ["N/A"]
+            level_disabled = True
     elif subject == "English" and ("Year 11" in year_group or "Year 12" in year_group):
         level_opts = ["Standard", "Advanced", "EALD", "Extension"]
     else:
@@ -4007,22 +4150,39 @@ with c3:
 actual_level = "" if level == "N/A" else level
 
 available_topics = []
-for y in year_group:
-    p_path = get_parent_path(y, subject, actual_level)
-    available_topics.extend(get_available_topics(p_path))
+manifest_data = load_syllabus_manifest()
 
-# Seamless fallback to textbook syllabus manifest if folder topics are empty
-if not available_topics:
-    manifest_data = load_syllabus_manifest()
-    for y in year_group:
-        candidate_keys = [
-            f"{y} {subject} {actual_level}".strip(),
-            f"{y} {subject}".strip()
-        ]
-        for ck in candidate_keys:
-            if ck in manifest_data:
-                available_topics.extend([f"{c['num']}. {c['name']}" for c in manifest_data[ck].get("chapters", [])])
+for y in year_group:
+    y_topics = []
+    lvl_cands = resolve_level_for_year(y, subject, actual_level)
+
+    # 1. Try sample folders for this year
+    for cand in lvl_cands:
+        p_path = get_parent_path(y, subject, cand)
+        raw_dirs = get_available_topics(p_path)
+        real_dirs = [d for d in raw_dirs if d not in LEVEL_NAMES]
+        if real_dirs:
+            y_topics = sorted(real_dirs, key=lambda x: [int(c) if c.isdigit() else c for c in re.split(r"(\d+)", x)])
+            break
+
+    # 2. Seamless per-year fallback to syllabus manifest if folder topics are empty
+    if not y_topics:
+        for cand in lvl_cands:
+            candidate_keys = [
+                f"{y} {subject} {cand}".strip(),
+                f"{y} {subject}".strip()
+            ]
+            for ck in candidate_keys:
+                if ck in manifest_data:
+                    y_topics = [f"{c['num']}. {c['name']}" for c in manifest_data[ck].get("chapters", [])]
+                    break
+            if y_topics:
                 break
+
+    yr_num = re.sub(r"\D", "", y)
+    yr_badge = f"(Yr {yr_num})" if yr_num else f"({y})"
+    for t in y_topics:
+        available_topics.append(f"{t} {yr_badge}")
 
 available_topics = sorted(list(set(available_topics)), key=lambda x: [int(c) if c.isdigit() else c for c in re.split(r"(\d+)", x)])
 
@@ -4154,7 +4314,15 @@ safe_topic = topic[0] if isinstance(topic, list) and len(topic) > 0 else (topic 
 combined_samples = []
 msgs = []
 for y in year_group:
-    s, m = load_style_samples(y, subject, actual_level, safe_topic if available_topics else "")
+    target_topic = safe_topic
+    yr_num = re.sub(r"\D", "", y)
+    if isinstance(topic, list) and len(topic) > 0:
+        matching_for_y = [t for t in topic if f"[{y}]" in t or re.search(rf"\((?:Yr|Year)\s*{yr_num}\)", t, re.IGNORECASE)]
+        if matching_for_y:
+            target_topic = matching_for_y[0]
+        elif any(re.search(r"(\[Year\s*\d+\]|\((?:Yr|Year)\s*\d+\))", t, re.IGNORECASE) for t in topic):
+            target_topic = ""
+    s, m = load_style_samples(y, subject, actual_level, target_topic if available_topics or target_topic else "")
     if s:
         combined_samples.append(s)
         msgs.append(f"{y}: {m.replace('✅ ', '').replace('⚠️ ', '')}")
@@ -4241,7 +4409,13 @@ if generate_btn:
             clean_topic = "Topics from Attached Document"
         else:
             topic_list = topic if isinstance(topic, list) else [topic]
-            raw_t = ", ".join([re.sub(r"^\d+[\.\-]\s*", "", t).strip() for t in topic_list])
+            raw_t = ", ".join([
+                re.sub(r"^\d+[\.\-]\s*", "",
+                    re.sub(r"\s*\((?:Yr|Year)\s*\d+\)$", "",
+                        re.sub(r"^\[Year\s*\d+\]\s*", "", t, flags=re.IGNORECASE).strip(),
+                    flags=re.IGNORECASE).strip()
+                ).strip() for t in topic_list
+            ])
             if sub_topic:
                 safe_sub = sub_topic.replace("/", "-").replace("\\", "-")
                 raw_t = f"{raw_t} - {safe_sub}"
