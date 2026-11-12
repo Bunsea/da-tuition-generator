@@ -8,4 +8,5 @@ numpy
 python-docx
 pytz
 Pillow
+pillow-heif
 openai

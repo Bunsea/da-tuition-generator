@@ -17,7 +17,7 @@ import logging
 import ast
 import operator as _op
 from urllib.parse import unquote
-from PIL import Image
+from PIL import Image, ImageOps
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -83,6 +83,26 @@ def format_job_sydney_time(dt):
     if date_str and time_str:
         return f"{date_str}, {time_str}"
     return time_str or date_str or (str(dt) if dt else "")
+
+
+def _prepare_uploaded_image(doc_bytes: bytes, filename: str) -> tuple[bytes, str]:
+    """Convert iPhone HEIC/HEIF photos to JPEG for the Gemini image payload."""
+    extension = os.path.splitext(filename.lower())[1]
+    if extension in (".heic", ".heif"):
+        from pillow_heif import register_heif_opener
+
+        register_heif_opener()
+        with Image.open(io.BytesIO(doc_bytes)) as image:
+            oriented_image = ImageOps.exif_transpose(image)
+            output = io.BytesIO()
+            oriented_image.convert("RGB").save(output, format="JPEG", quality=90)
+        return output.getvalue(), "image/jpeg"
+
+    if extension == ".png":
+        return doc_bytes, "image/png"
+    if extension == ".webp":
+        return doc_bytes, "image/webp"
+    return doc_bytes, "image/jpeg"
 
 
 def _safe_dt_timestamp(dt) -> float:
@@ -2236,8 +2256,8 @@ When instructed, your final combined output must follow this template structure 
                     except Exception:
                         pass
                 else:
-                    mime_type = "image/png" if fname.endswith(".png") else ("image/webp" if fname.endswith(".webp") else "image/jpeg")
-                    ai_payload.append(types.Part.from_bytes(data=doc_bytes, mime_type=mime_type))
+                    image_bytes, mime_type = _prepare_uploaded_image(doc_bytes, fname)
+                    ai_payload.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
 
             ai_payload.append(
                 "\n\n[ATTACHED DOCUMENTS INSTRUCTION - HIGHEST PRIORITY]:\n"
@@ -4230,7 +4250,7 @@ exemplar_questions = st.text_area(
 st.markdown("##### 📸 Or, Upload an Exam Notification / Worksheet Photo(s)")
 uploaded_photos = st.file_uploader(
     "Upload picture(s) or PDF pages of a school worksheet or exam notice to automatically extract the context (multiple files supported)",
-    type=["png", "jpg", "jpeg", "webp", "pdf"],
+    type=["png", "jpg", "jpeg", "webp", "heic", "heif", "pdf"],
     accept_multiple_files=True,
 )
 
