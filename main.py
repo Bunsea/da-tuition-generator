@@ -577,7 +577,7 @@ def save_to_supabase(
                     "gemini_cost": round(float(gemini_cost), 5) if gemini_cost is not None else None,
                     "ds_cost": round(float(ds_cost), 5) if ds_cost is not None else None,
                     "model": str(model or "gemini-3.8-flash"),
-                    "audit_status": audit_data.get("status") if isinstance(audit_data, dict) else "APPROVED",
+                    "audit_status": audit_data.get("status") if isinstance(audit_data, dict) else "NOT_RUN",
                     "audit_summary": audit_data.get("summary") if isinstance(audit_data, dict) else "",
                 }
                 supabase_client.storage.from_("exam-files").upload(
@@ -2811,7 +2811,7 @@ def render_exam_queue_dashboard():
                 if d_cost > 0:
                     meta_line += f" · 💸 ${float(cost_val):.4f} (Gemini: ${g_cost:.4f} · DeepSeek: ${d_cost:.4f})"
                 else:
-                    meta_line += f" · 💸 ${float(cost_val):.4f} (Gemini: ${g_cost:.4f})"
+                    meta_line += f" · 💸 ${float(cost_val):.4f} (Gemini: ${g_cost:.4f} · DeepSeek: no charge recorded)"
             except Exception:
                 meta_line += f" · 💸 ${float(cost_val):.4f}"
 
@@ -3536,7 +3536,7 @@ with st.sidebar:
                 st.session_state["deepseek_api_key"] = ds_key_input.strip()
             _active_k = _get_deepseek_api_key()
             if _active_k:
-                st.caption(f"Connected: `{_mask_api_key(_active_k)}` · Model: `deepseek-reasoner`")
+                st.caption(f"Key configured: `{_mask_api_key(_active_k)}` · Model: `deepseek-reasoner`")
             else:
                 st.caption("⚠️ No DeepSeek key connected.")
         use_live_search = st.checkbox("🌍 Enable Live Web Search", value=False)
@@ -3577,9 +3577,9 @@ def _get_audit_meta_from_storage(pdf_url: str) -> dict:
     return {}
 
 
-def _get_exam_cost_info(exam: dict) -> tuple[float, float, float, str]:
-    """Extract stored cost or compute an accurate estimate including Gemini and DeepSeek-R1 breakdown.
-    Returns (total_cost, gemini_cost, ds_cost, model_name)."""
+def _get_exam_cost_info(exam: dict) -> tuple[float, float | None, float | None, str]:
+    """Use recorded costs when available; never invent a DeepSeek charge for old exams.
+    Returns (total_cost, gemini_cost, ds_cost, model_name); unknown splits are None."""
     model_name = exam.get("model") or "gemini-3.8-flash"
 
     # 1. Direct columns in DB row if present
@@ -3607,19 +3607,14 @@ def _get_exam_cost_info(exam: dict) -> tuple[float, float, float, str]:
     if exam.get("cost") is not None:
         try:
             t = float(exam["cost"])
-            d = float(exam.get("ds_cost") or 0.0)
-            if d == 0.0:
-                # Standard DeepSeek-R1 auditor rate on HSC maths exams (~$0.0035 to $0.0055)
-                # If total cost is around ~$0.0349, DeepSeek portion is $0.0045, Gemini is $0.0304
-                if t >= 0.0300:
-                    d = 0.0045
-                    g = max(0.0, round(t - d, 5))
-                else:
-                    g = round(t, 5)
-                    d = 0.0
-            else:
-                g = max(0.0, round(t - d, 5))
-            return round(t, 5), round(g, 5), round(d, 5), model_name
+            if exam.get("ds_cost") is not None:
+                d = float(exam["ds_cost"])
+                g = float(exam["gemini_cost"]) if exam.get("gemini_cost") is not None else max(0.0, t - d)
+                return round(t, 5), round(g, 5), round(d, 5), model_name
+            if exam.get("gemini_cost") is not None:
+                g = float(exam["gemini_cost"])
+                return round(t, 5), round(g, 5), None, model_name
+            return round(t, 5), None, None, model_name
         except (ValueError, TypeError):
             pass
 
@@ -3642,10 +3637,7 @@ def _get_exam_cost_info(exam: dict) -> tuple[float, float, float, str]:
 
     # Gemini 3.8 Flash pricing: $0.75 / 1M in, $3.75 / 1M out
     g_cost = ((est_in_tokens / 1_000_000) * 0.75) + ((est_out_tokens / 1_000_000) * 3.75)
-    # DeepSeek-R1 auditor pricing: $0.55 / 1M in (~4,000 in), $2.19 / 1M out (~1,200 reasoning out)
-    d_cost = ((4000 / 1_000_000) * 0.55) + ((1200 / 1_000_000) * 2.19)
-    total_cost = g_cost + d_cost
-    return round(total_cost, 5), round(g_cost, 5), round(d_cost, 5), model_name
+    return round(g_cost, 5), None, None, model_name
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -4023,11 +4015,20 @@ if app_mode == "📚 Exam Library":
                 for exam in filtered_exams:
                     lvl_str_lib = f" {exam['difficulty']}" if exam.get("difficulty") else ""
                     total_cost, gemini_cost, ds_cost, model_val = _get_exam_cost_info(exam)
-                    if ds_cost > 0:
+                    if ds_cost is not None and ds_cost > 0:
                         cost_badge = f"${total_cost:.4f} (Gemini: ${gemini_cost:.4f} · DeepSeek: ${ds_cost:.4f})"
                         engine_val = f"{model_val} + deepseek-r1"
+                    elif ds_cost == 0 and gemini_cost is not None:
+                        cost_badge = f"${total_cost:.4f} (Gemini: ${gemini_cost:.4f} · DeepSeek: no charge recorded)"
+                        engine_val = model_val
+                    elif gemini_cost is not None:
+                        cost_badge = f"${total_cost:.4f} (Gemini: ${gemini_cost:.4f} · DeepSeek: cost unavailable)"
+                        engine_val = model_val
+                    elif exam.get("cost") is None:
+                        cost_badge = f"≈${total_cost:.4f} (estimate; DeepSeek cost unavailable)"
+                        engine_val = model_val
                     else:
-                        cost_badge = f"${total_cost:.4f} (Gemini: ${gemini_cost:.4f})"
+                        cost_badge = f"${total_cost:.4f} (cost breakdown unavailable)"
                         engine_val = model_val
 
                     with st.expander(f"📝 {exam['topic']} ({exam['subject']} - {exam['year_group']}{lvl_str_lib})  ·  💸 {cost_badge}"):
@@ -4036,6 +4037,19 @@ if app_mode == "📚 Exam Library":
                         has_sol = _exam_has_solutions(exam)
                         sol_badge = "✅ Worked Solutions" if has_sol else "📋 Short Answers Only (No Worked Solutions)"
                         st.caption(f"📅 **Generated:** {sydney_timestamp} &nbsp;&nbsp;|&nbsp;&nbsp; 👤 **Teacher:** {teacher_name} &nbsp;&nbsp;|&nbsp;&nbsp; 💸 **Cost:** {cost_badge} &nbsp;&nbsp;|&nbsp;&nbsp; 🤖 **Engine:** `{engine_val}` &nbsp;&nbsp;|&nbsp;&nbsp; 📄 **{sol_badge}**")
+                        if ds_cost is None or ds_cost == 0:
+                            if st.button("🛡️ Check DeepSeek audit record", key=f"audit_status_{exam['id']}"):
+                                audit_meta = _get_audit_meta_from_storage(exam.get("pdf_url", ""))
+                                audit_status = audit_meta.get("audit_status")
+                                audit_summary = audit_meta.get("audit_summary") or ""
+                                if audit_status == "ERROR":
+                                    st.warning(f"DeepSeek check failed: {audit_summary or 'No reason was saved.'}")
+                                elif audit_status == "NOT_RUN":
+                                    st.info("DeepSeek checking was not used for this exam.")
+                                elif audit_status in ("APPROVED", "REVISION_NEEDED") and audit_summary:
+                                    st.info(f"DeepSeek responded ({audit_status}), but no usage cost was recorded. {audit_summary}")
+                                else:
+                                    st.info("This exam has no reliable saved DeepSeek audit status or price.")
 
                         e_col1, e_col2, e_col3, e_col4 = st.columns([2, 2, 2, 1])
                         if exam.get("pdf_url"):
@@ -4627,7 +4641,7 @@ if st.session_state.questions_text:
         if ds_cost > 0:
             split_info = f" (🤖 Gemini: ${gemini_cost:.4f} &nbsp;|&nbsp; 🛡️ DeepSeek Auditor: ${ds_cost:.4f})"
         else:
-            split_info = f" (🤖 Gemini: ${gemini_cost:.4f})"
+            split_info = f" (🤖 Gemini: ${gemini_cost:.4f} &nbsp;|&nbsp; 🛡️ DeepSeek Auditor: no charge recorded)"
         st.caption(f"**💸 Generation Cost:** ${total_cost:.5f}{split_info} &nbsp;&nbsp;|&nbsp;&nbsp; **Engine:** `{model_used}` &nbsp;&nbsp;|&nbsp;&nbsp; **Tokens:** {in_tok:,} In / {out_tok:,} Out{search_badge}")
         st.caption("ℹ️ Reflects official Gemini 3.8 Flash rates ($0.75/1M in, $3.75/1M out) + DeepSeek-R1 auditor rates ($0.55/1M in, $2.19/1M out).")
 
