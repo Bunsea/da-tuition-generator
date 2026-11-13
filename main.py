@@ -21,6 +21,7 @@ from PIL import Image, ImageOps
 import hashlib
 import json
 from datetime import datetime, timezone
+from exam_scope import build_exam_scope
 
 try:
     from zoneinfo import ZoneInfo
@@ -1737,7 +1738,8 @@ def audit_exam_with_deepseek(
         "3. DIAGRAM INTEGRITY:\n"
         "   - If any question refers to a figure, geometric shape, or diagram (e.g. 'In the diagram below', 'The figure shows'), verify that a valid rendered diagram (TikZ or Python graph) is present.\n"
         "4. QUESTION SPECIFICATIONS:\n"
-        "   - Verify that the draft aligns with the intended topic, level, and question count.\n\n"
+        "   - Verify that the draft aligns with the intended topic, level, and question count.\n"
+        "   - Inspect the full solution to every question for content from a chapter or subtopic the teacher did not select, even when that content is within the NSW syllabus. Mark REVISION_NEEDED for any such crossover and give a replacement that stays within the requested scope.\n\n"
         "OUTPUT FORMAT (STRICT DELIMITERS):\n"
         "===AUDIT_STATUS===\n"
         "[APPROVED or REVISION_NEEDED]\n"
@@ -1935,6 +1937,9 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
         policy_level = next((level for level in ("Extension 2", "Extension 1", "Extension", "Advanced", "Standard") if level in actual_levels), actual_level)
         clean_topic = params.get("clean_topic", "General")
         sub_topic = params.get("sub_topic", "")
+        requested_topics = params.get("requested_topics", [])
+        custom_topic = params.get("custom_topic", "")
+        custom_subtopic = params.get("custom_subtopic", "")
         grades_string = params.get("grades_string", ", ".join(year_group))
         current_set_number = params.get("current_set_number", 1)
         display_topic = params.get("display_topic", f"{clean_topic} Set {current_set_number}")
@@ -2089,6 +2094,7 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
             "Make hard questions harder only through deeper reasoning and combinations of in-syllabus content. "
             "If a sample, textbook challenge exercise, custom instruction, or requested subtopic conflicts with this rule, omit the out-of-syllabus part."
         )
+        syllabus_ban += "\n\n" + build_exam_scope(requested_topics, custom_topic, custom_subtopic, bool(uploaded_files_data))
 
         # Manifest grounding across all selected years
         manifest_data = load_syllabus_manifest()
@@ -2111,18 +2117,18 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
         if matched_courses:
             manifest_context = ""
             for matched_course in matched_courses:
+                course_topics = [t for t in requested_topics if t.get("year") == matched_course.get("year") and t.get("level") == matched_course.get("level")]
                 textbook_ref = matched_course.get("textbook", "")
-                ch_list = [f"- Chapter {c['num']}: {c['name']} (Subtopics: {', '.join(c.get('subtopics', []))})" for c in matched_course.get("chapters", [])]
-                inclusions = matched_course.get("inclusions", [])
+                chapters = [c for c in matched_course.get("chapters", []) if any(t.get("name") == c.get("name") for t in course_topics)]
+                ch_list = [f"- Chapter {c['num']}: {c['name']} (Subtopics: {', '.join(c.get('subtopics', []))})" for c in chapters]
                 exclusions = matched_course.get("exclusions", [])
                 manifest_context += f"\n\nSELECTED COURSE: {matched_course.get('year', '')} {matched_course.get('level', '')}. TEXTBOOK BENCHMARK ({textbook_ref}):\n"
-                manifest_context += "The following are the authoritative chapters and granular subtopics for this course:\n" + "\n".join(ch_list) + "\n"
-                if inclusions:
-                    manifest_context += "\nCOURSE SCOPE NOTES:\n" + "\n".join([f"• {inc}" for inc in inclusions]) + "\n"
+                if ch_list:
+                    manifest_context += "Requested textbook chapters (the subtopic restrictions above still apply):\n" + "\n".join(ch_list) + "\n"
                 if exclusions and len(actual_levels) <= 1:
                     manifest_context += "\nSTRICT EXCLUSIONS & BANS:\n" + "\n".join([f"• {exc}" for exc in exclusions]) + "\n"
             syllabus_ban += manifest_context
-            syllabus_ban += "\nThe selected topics and subtopics in the exam focus define the question scope. Other textbook chapters are reference only.\n"
+            syllabus_ban += "\nCourse and textbook descriptions establish syllabus limits; they never add unrequested exam topics.\n"
 
         dist_req = []
         if num_mc > 0:
@@ -2165,7 +2171,7 @@ EXAMINER RULES:
 CRITICAL EXCEPTIONS: 
 - DO NOT use the Python tool for pure algebraic, calculus, or trigonometric topics (e.g., Parametrics, Inverse Functions, Polynomials, Integration). Evaluate symbolic algebra using your own internal reasoning.
 10. ATTACHED DOCUMENT & QUESTION CLONING RULE (CRITICAL):
-    - ASSESSMENT NOTIFICATION / SCOPE & SEQUENCE: If the attached document is an Assessment Notification or list of topics/outcomes, you MUST strictly and exclusively generate questions on the exact topics and skills listed in that document. Distribute questions across all listed areas. DO NOT generate questions on unlisted topics.
+    - ASSESSMENT NOTIFICATION / SCOPE & SEQUENCE: If the attached document is an Assessment Notification or list of topics/outcomes, generate questions only on its listed topics and skills. If the teacher also selected topics or subtopics above, use the intersection of those selections and the attachment. DO NOT generate questions on unlisted topics.
     - QUESTION EXEMPLARS: If sample questions or past worksheet items are provided, reverse-engineer their mathematical mechanics, formatting phrasing, structural complexity, and cognitive depth to generate original parallel practice questions.
 11. CRITICAL OUTPUT FORMAT & NO COMMENTS: You must output ONLY the raw content. 
     - Do NOT generate \\documentclass, \\usepackage, \\begin{{document}}, \\end{{document}}, or \\geometry.
@@ -2382,7 +2388,8 @@ When instructed, your final combined output must follow this template structure 
                         f"AUDITOR'S SPECIFIC CORRECTION INSTRUCTIONS:\n{audit_res.get('correction_prompt')}\n\n"
                         "CRITICAL TASK:\n"
                         "Regenerate the complete exam, applying the auditor's corrections.\n"
-                        "Keep all already-correct questions untouched, and strictly replace or fix the flagged questions to ensure 100% mathematical accuracy and strict syllabus compliance.\n"
+                        "Keep all already-correct questions untouched, and strictly replace or fix the flagged questions to ensure 100% mathematical accuracy, strict syllabus compliance, and strict compliance with the teacher's requested topics and subtopics.\n"
+                        f"REQUESTED SCOPE AND SYLLABUS RULES:\n{syllabus_ban}\n"
                         "Output using the exact same format tags:\n"
                         "===FILENAME_START=== ... ===FILENAME_END===\n"
                         "===LATEX_CONTENT_START=== ... ===LATEX_CONTENT_END===\n"
@@ -4199,6 +4206,7 @@ actual_level = " + ".join(actual_levels)
 
 available_topics = []
 topic_subtopics = {}
+topic_catalog = {}
 manifest_data = load_syllabus_manifest()
 
 for y in year_group:
@@ -4231,6 +4239,12 @@ for y in year_group:
                 chapter_name = re.sub(r"^\d+[.\-]\s*", "", t).strip()
                 chapter = next((c for c in (course or {}).get("chapters", []) if c["name"].casefold() == chapter_name.casefold()), None)
                 topic_subtopics[label] = chapter.get("subtopics", []) if chapter else []
+                topic_catalog[label] = {
+                    "year": y,
+                    "level": selected_level,
+                    "name": chapter_name,
+                    "all_subtopics": topic_subtopics[label],
+                }
 
 c4, c5, c6 = st.columns([3, 2, 1])
 with c4:
@@ -4252,6 +4266,7 @@ with c4:
             combined_topics.append(custom_topic_text.strip())
         topic = combined_topics
     else:
+        selected_topics = []
         custom_topic_text = st.text_input(
             "Topic (type your own)",
             placeholder="e.g. Algebra, Calculus, Financial Maths",
@@ -4502,6 +4517,16 @@ if generate_btn:
                 "type": p["type"],
             })
 
+        requested_topics = []
+        for selected_topic in selected_topics:
+            entry = topic_catalog[selected_topic].copy()
+            entry["selected_subtopics"] = [
+                item.removesuffix(f" — {selected_topic}")
+                for item in selected_subtopics
+                if item.endswith(f" — {selected_topic}")
+            ]
+            requested_topics.append(entry)
+
         job_params = {
             "api_key": api_key,
             "deepseek_api_key": _get_deepseek_api_key(),
@@ -4513,6 +4538,9 @@ if generate_btn:
             "actual_levels": actual_levels,
             "clean_topic": clean_topic,
             "sub_topic": sub_topic,
+            "requested_topics": requested_topics,
+            "custom_topic": custom_topic_text.strip(),
+            "custom_subtopic": custom_subtopic.strip(),
             "grades_string": grades_string,
             "current_set_number": current_set_number,
             "display_topic": display_topic,
