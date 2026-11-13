@@ -1300,6 +1300,18 @@ def build_word_doc_pandoc(content, answers, solutions, topic, header_title, tota
     return None
 
 
+def _run_pdflatex(filename: str, work_dir: str, halt_on_error: bool = True):
+    command = ["pdflatex", "-interaction=nonstopmode"]
+    if halt_on_error:
+        command.append("-halt-on-error")
+    command.append(filename)
+    # TeX logs can contain bytes in legacy encodings even when the .tex file is UTF-8.
+    return subprocess.run(
+        command, cwd=work_dir, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+    )
+
+
 def build_latex_pdf(display_topic, header_title, content, answers, solutions, total_marks, time_allowed, work_dir):
     filename = os.path.join(work_dir, "exam.tex")
     pdf_filename = os.path.join(work_dir, "exam.pdf")
@@ -1383,14 +1395,8 @@ def build_latex_pdf(display_topic, header_title, content, answers, solutions, to
         return None, tex_bytes, "CRITICAL ERROR: 'pdflatex' not found."
 
     try:
-        proc = subprocess.run(
-            ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", filename],
-            cwd=work_dir, capture_output=True, text=True,
-        )
-        subprocess.run(
-            ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", filename],
-            cwd=work_dir, capture_output=True, text=True,
-        )
+        proc = _run_pdflatex(filename, work_dir)
+        proc = _run_pdflatex(filename, work_dir)
         if not os.path.exists(pdf_filename):
             # Recovery pass: check if failure was due to \tag or similar amsmath errors
             if proc.stdout and ("tag not allowed" in proc.stdout or "amsmath Error: \\tag" in proc.stdout):
@@ -1404,10 +1410,7 @@ def build_latex_pdf(display_topic, header_title, content, answers, solutions, to
                 with open(filename, "w", encoding="utf-8") as f:
                     f.write(fixed_tex)
                 tex_bytes = fixed_tex.encode("utf-8")
-                proc = subprocess.run(
-                    ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", filename],
-                    cwd=work_dir, capture_output=True, text=True,
-                )
+                proc = _run_pdflatex(filename, work_dir)
 
             if not os.path.exists(pdf_filename) and proc.stdout and ("Extra }" in proc.stdout or "forgotten $" in proc.stdout):
                 with open(filename, "r", encoding="utf-8") as f:
@@ -1418,22 +1421,16 @@ def build_latex_pdf(display_topic, header_title, content, answers, solutions, to
                     with open(filename, "w", encoding="utf-8") as f:
                         f.write(fixed_tex)
                     tex_bytes = fixed_tex.encode("utf-8")
-                    proc = subprocess.run(
-                        ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", filename],
-                        cwd=work_dir, capture_output=True, text=True,
-                    )
+                    proc = _run_pdflatex(filename, work_dir)
 
             if not os.path.exists(pdf_filename):
                 # Final fallback pass: run without -halt-on-error so pdflatex recovers from minor math/tikz warnings and still emits the PDF
-                subprocess.run(
-                    ["pdflatex", "-interaction=nonstopmode", filename],
-                    cwd=work_dir, capture_output=True, text=True,
-                )
+                proc = _run_pdflatex(filename, work_dir, halt_on_error=False)
 
         if os.path.exists(pdf_filename):
             with open(pdf_filename, "rb") as f:
                 return f.read(), tex_bytes, ""
-        return None, tex_bytes, proc.stdout
+        return None, tex_bytes, "\n".join(part for part in (proc.stdout, proc.stderr) if part)
     except Exception as e:
         return None, tex_bytes, str(e)
 
