@@ -1730,7 +1730,8 @@ def audit_exam_with_deepseek(
         "   - Are all numerical values and geometric conditions consistent (no unintended real-number domain violations like negative square roots, division by zero, or degenerate triangles)?\n"
         "   - Are the provided answers in the answer key mathematically verified and accurate?\n"
         "2. CURRENT NESA SYLLABUS BOUNDARY COMPLIANCE (CRITICAL):\n"
-        "   - Even for 'Hard' or 'Extremely Hard' questions, you must NEVER allow concepts, formulas, or techniques outside the official NSW HSC syllabus. If a question introduces university-level math, competition math tricks, or out-of-scope methods to increase difficulty, flag it for REVISION.\n"
+        "   - Check every question AND its complete expected working and answer. Mark REVISION_NEEDED if solving any part requires a rule, theory, concept, formula, theorem, proof, method, or intermediate step outside the NSW syllabus for the selected year and course level(s). This applies even to Hard and Extremely Hard questions, including requirements that are only implicit in the question.\n"
+        "   - Textbook challenge material, exemplars, and user instructions cannot make an out-of-syllabus requirement acceptable. Difficulty must come only from combining and applying in-syllabus content.\n"
         "   - Adhere strictly to the course syllabus boundaries:\n"
         "     * Universal bans: Pigeonhole Principle, internal/external division of an interval, and Euclidean circle geometry proofs are STRICTLY BANNED across ALL courses.\n"
         "     * For Extension 1 selections without Extension 2: vector proofs, t-formulae and product-to-sum identities are outside the selected course. 3D vectors are included.\n"
@@ -2080,11 +2081,17 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
 
             syllabus_ban = (
                 f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the current NESA {grades_string} {actual_level} syllabus and the selected textbook chapters.{universal_ban}{level_ban}{yr_ban}\n"
-                "CRITICAL DIFFICULTY BOUNDARY: NEVER include concepts, theorems, or techniques outside the official NSW HSC syllabus, even for Hard and Extremely Hard questions. "
-                "High difficulty MUST come from deep conceptual synthesis, multi-stage reasoning, and novel framing WITHIN the syllabus — NEVER from university mathematics, competition math tricks, or out-of-syllabus methods."
             )
         else:
             syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the current NESA {grades_string} {subject} syllabus. Ensure all diagrams, notations, reaction rates, equilibrium graphs, and scientific concepts follow official NSW HSC curriculum standards."
+
+        syllabus_ban += (
+            "\nABSOLUTE NSW SYLLABUS REQUIREMENT FOR EVERY DIFFICULTY LEVEL, INCLUDING EXTREMELY HARD: "
+            "NEVER generate a question if answering it or showing any required working would need a rule, theory, concept, formula, theorem, proof, technique, method, or intermediate step outside the NSW syllabus for the selected year and course level(s). "
+            "Check the entire solution path, including hidden prerequisites, before writing each question. "
+            "Make hard questions harder only through deeper reasoning and combinations of in-syllabus content. "
+            "If a sample, textbook challenge exercise, custom instruction, or requested subtopic conflicts with this rule, omit the out-of-syllabus part."
+        )
 
         # Manifest grounding across all selected years
         manifest_data = load_syllabus_manifest()
@@ -2138,6 +2145,8 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
 
         prompt = f"""You are a NESA Examiner.
 Generate an examination on "{exam_focus}" for {grades_string}{level_text} in {subject}.
+
+NON-NEGOTIABLE: Every question and every step needed to solve it must stay within the NSW syllabus for the selected year and course level(s), even at Extremely Hard difficulty. Do not require out-of-syllabus working, rules, theory, concepts, or methods.
 
 CRITICAL QUESTION DISTRIBUTION (OBEY EXACTLY): 
 - You MUST generate EXACTLY {total_q} questions in total.
