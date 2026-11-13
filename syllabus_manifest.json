@@ -404,251 +404,295 @@
     "year": "Year 12",
     "subject": "Maths",
     "level": "Standard",
-    "textbook": "CambridgeMATHS Stage 6 NSW Mathematics Standard Year 12 (2nd Edition, 2025/2026)",
+    "textbook": "Maths in Focus 12 Mathematics Standard 2, 5th Edition",
     "chapters": [
       {
         "num": "1",
-        "name": "Ratios and Rates",
+        "name": "Investment and Depreciation",
         "subtopics": [
-          "Review of ratios and rates",
-          "Rates of change and speed",
-          "Fuel consumption and cost comparisons",
-          "Scale drawings and map reading"
+          "1.01 Simple interest",
+          "1.02 Simple interest graphs",
+          "1.03 Compound interest",
+          "1.04 Inflation and appreciation",
+          "1.05 Investing in shares",
+          "1.06 Share tables and graphs",
+          "1.07 Straight-line depreciation",
+          "1.08 Declining balance depreciation"
         ]
       },
       {
         "num": "2",
-        "name": "Relative Frequency and Probability",
+        "name": "Ratios and Scales",
         "subtopics": [
-          "Relative frequency and experimental probability",
-          "Probability trees and multi-stage events",
-          "Simulations and probability models",
-          "Expected frequency"
+          "2.01 Ratio problems",
+          "2.02 Dividing a quantity in a given ratio",
+          "2.03 The capture-recapture technique",
+          "2.04 Scale drawings",
+          "2.05 Scale maps and plans",
+          "2.06 House plans",
+          "2.07 Surveying and the trapezoidal rule"
         ]
       },
       {
         "num": "3",
-        "name": "Investments and Loans",
+        "name": "Equations and Linear Functions",
         "subtopics": [
-          "Compound interest investments",
-          "Inflation and purchasing power",
-          "Shares and dividends",
-          "Reducing balance loans and credit"
+          "3.01 Solving equations",
+          "3.02 Formulas and equations",
+          "3.03 Changing the subject of a formula",
+          "3.04 Linear functions",
+          "3.05 Direct linear variation",
+          "3.06 Intersection of lines",
+          "3.07 Simultaneous equations"
         ]
       },
       {
         "num": "4",
-        "name": "Trigonometry",
+        "name": "Loans and Annuities",
         "subtopics": [
-          "Right-angled triangle review",
-          "Sine rule and cosine rule in non-right angled triangles",
-          "Area of general triangles",
-          "Bearings and navigation in two-step problems"
+          "4.01 Loans",
+          "4.02 Reducing balance loans",
+          "4.03 Credit cards",
+          "4.04 Annuities",
+          "4.05 Present value of an annuity",
+          "4.06 Paying off loans"
         ]
       },
       {
         "num": "5",
-        "name": "Simultaneous Linear Equations",
+        "name": "Correlation and Regression",
         "subtopics": [
-          "Solving simultaneous equations graphically",
-          "Solving simultaneous equations algebraically",
-          "Break-even analysis (cost, revenue, profit models)"
+          "5.01 Scatter plots",
+          "5.02 Correlation",
+          "5.03 Line of best fit",
+          "5.04 Least-squares regression line"
         ]
       },
       {
         "num": "6",
-        "name": "Bivariate Data Analysis",
+        "name": "Project and Flow Networks",
         "subtopics": [
-          "Scatter plots and association",
-          "Pearsons correlation coefficient r",
-          "Line of best fit (by eye and least-squares regression)",
-          "Interpolation and extrapolation",
-          "Causation versus correlation"
+          "6.01 Minimum spanning trees",
+          "6.02 Shortest path problems",
+          "6.03 Project networks",
+          "6.04 Critical path analysis",
+          "6.05 Network flow problems",
+          "6.06 The maximum-flow minimum-cut theorem"
         ]
       },
       {
         "num": "7",
-        "name": "Annuities",
+        "name": "Probability",
         "subtopics": [
-          "Future value of annuities and recurrence relations",
-          "Present value of annuities",
-          "Calculating regular repayments on loans using tables and formulas"
+          "7.01 Probability of simple events",
+          "7.02 Complementary events",
+          "7.03 Venn diagrams and two-way tables",
+          "7.04 Tables and tree diagrams",
+          "7.05 Probability tree diagrams and the product rule",
+          "7.06 Relative frequency",
+          "7.07 Comparing relative frequency with theoretical probability"
         ]
       },
       {
         "num": "8",
-        "name": "Non-Linear Relationships",
+        "name": "The Sine and Cosine Rules",
         "subtopics": [
-          "Exponential relationships and exponential growth/decay",
-          "Quadratic models and parabolic trajectories",
-          "Reciprocal functions and inverse variation"
+          "8.01 Right-angled triangle trigonometry",
+          "8.02 Bearings",
+          "8.03 The sine rule",
+          "8.04 Trigonometry with obtuse angles",
+          "8.05 The sine rule for angles",
+          "8.06 The cosine rule",
+          "8.07 The cosine rule for angles",
+          "8.08 Area of a triangle",
+          "8.09 Problems involving the sine and cosine rules",
+          "8.10 Radial surveys"
         ]
       },
       {
         "num": "9",
-        "name": "The Normal Distribution",
+        "name": "Rates and Energy",
         "subtopics": [
-          "Characteristics of normal distributions",
-          "The empirical rule (68-95-99.7 rule)",
-          "Calculating and interpreting z-scores",
-          "Converting z-scores to actual scores",
-          "Using z-scores to compare data from different distributions"
+          "9.01 Rate problems",
+          "9.02 Unit pricing",
+          "9.03 Speed and fuel consumption",
+          "9.04 Distance-time graphs",
+          "9.05 Converting rates",
+          "9.06 Electricity usage in the home",
+          "9.07 Energy consumption and the costs of appliances"
         ]
       },
       {
         "num": "10",
-        "name": "Network Flow and Critical Path Analysis",
+        "name": "Non-linear Functions",
         "subtopics": [
-          "Network flow problems and capacities",
-          "Cuts in a flow network and the Minimum Cut - Maximum Flow theorem",
-          "Introduction to Critical Path Analysis (CPA)",
-          "Activity networks and precedence tables",
-          "Dummy activities",
-          "Forward scanning and backward scanning",
-          "Float times (slack time) and the critical path",
-          "Minimum project completion time",
-          "Gantt charts and project scheduling"
+          "10.01 The quadratic function",
+          "10.02 Maximum and minimum problems",
+          "10.03 The exponential function",
+          "10.04 Exponential growth and decay",
+          "10.05 The reciprocal function",
+          "10.06 Inverse variation"
+        ]
+      },
+      {
+        "num": "11",
+        "name": "The Normal Distribution",
+        "subtopics": [
+          "11.01 The normal distribution",
+          "11.02 z-scores",
+          "11.03 Comparing z-scores",
+          "11.04 Measures of centre and spread",
+          "11.05 The shape of a distribution",
+          "11.06 The effect of outliers",
+          "11.07 Comparing datasets"
         ]
       }
     ],
     "inclusions": [
-      "Relative Frequency and Probability (Chapter 2)",
-      "Critical Path Analysis and Network Flow (Chapter 10)",
-      "Normal Distribution and Z-scores (Chapter 9)",
-      "Bivariate Data Analysis and Least-squares regression (Chapter 6)",
-      "Annuities (Chapter 7)"
+      "Relative Frequency and Probability (Chapter 7)",
+      "Critical Path Analysis and Network Flow (Chapter 6)",
+      "Normal Distribution and z-scores (Chapter 11)",
+      "Correlation and least-squares regression (Chapter 5)",
+      "Loans and Annuities (Chapter 4)"
     ],
     "exclusions": [
-      "NO Basic Network Concepts (vertices, edges, Prim minimal spanning trees - moved to Year 11 Standard)",
       "NO Calculus or Differentiation",
       "NO Radians",
-      "NO 3D Trigonometry"
+      "NO 3D Trigonometry",
+      "Year 11 revision sections in the textbook are review content; use them only when explicitly selected"
     ]
   },
   "Year 12 Maths Advanced": {
     "year": "Year 12",
     "subject": "Maths",
     "level": "Advanced",
-    "textbook": "CambridgeMATHS Stage 6 NSW Mathematics Advanced Year 12 (2nd Edition, 2025/2026)",
+    "textbook": "CambridgeMATHS NSW Stage 6 Mathematics Extension 1 Year 12, 2nd Edition (Advanced chapters)",
     "chapters": [
       {
         "num": "1",
         "name": "Sequences and Series",
         "subtopics": [
-          "Arithmetic sequences (AP) and nth term",
-          "Geometric sequences (GP) and nth term",
-          "Applications of APs and GPs",
-          "Sum of arithmetic series",
-          "Sum of geometric series",
-          "Limiting sum of infinite geometric series",
-          "Recurring decimals as geometric series"
-        ]
-      },
-      {
-        "num": "2",
-        "name": "Curve-Sketching Using the Derivative",
-        "subtopics": [
-          "Increasing and decreasing functions",
-          "Stationary points and turning points",
-          "Second derivative and concavity",
-          "Points of inflection",
-          "Systematic curve sketching with derivative",
-          "Global maximum and minimum",
-          "Optimization applications in geometry and real-world problems",
-          "Primitive functions"
+          "1A Sequences and how to specify them",
+          "1B Arithmetic sequences",
+          "1C Geometric sequences",
+          "1D Solving problems involving APs and GPs",
+          "1E Adding up the terms of a sequence",
+          "1F Summing an arithmetic series",
+          "1G Summing a geometric series",
+          "1H The limiting sum of a geometric series",
+          "1I Recurring decimals and geometric series"
         ]
       },
       {
         "num": "3",
-        "name": "Integration",
+        "name": "Curve-sketching Using the Derivative",
         "subtopics": [
-          "Areas and the definite integral",
-          "The Fundamental Theorem of Calculus",
-          "Properties of the definite integral",
-          "Indefinite integrals and standard forms",
-          "Finding areas between a curve and an axis",
-          "Areas of compound regions between two curves",
-          "Trapezoidal rule",
-          "Reverse chain rule integration"
+          "3A Increasing, decreasing, and stationary at a point",
+          "3B Stationary points and turning points",
+          "3C Some less familiar curves",
+          "3D Second and higher derivatives",
+          "3E Concavity and points of inflection",
+          "3F Systematic curve sketching with the derivative",
+          "3G Global maximum and minimum",
+          "3H Review of continuity and differentiability",
+          "3I Applications of maximisation and minimisation",
+          "3J Maximisation and minimisation in geometry",
+          "3K Primitive functions"
         ]
       },
       {
         "num": "4",
-        "name": "Exponential Functions Calculus",
+        "name": "Integration",
         "subtopics": [
-          "Differentiation of e^(f(x))",
-          "Applications of exponential differentiation (tangents, rates)",
-          "Integration of e^(kx)",
-          "Applications of exponential integration (areas, rates)",
-          "Calculus with exponential functions to other bases"
+          "4A Areas and the definite integral",
+          "4B The fundamental theorem of calculus",
+          "4C The definite integral and its properties",
+          "4D Proving the fundamental theorem",
+          "4E The indefinite integral",
+          "4F Finding areas by integration",
+          "4G Areas of compound regions",
+          "4H The trapezoidal rule",
+          "4I The reverse chain rule"
         ]
       },
       {
         "num": "5",
-        "name": "Logarithmic Functions Calculus",
+        "name": "Exponential Functions",
         "subtopics": [
-          "Differentiation of ln(f(x))",
-          "Applications of log differentiation",
-          "Integration yielding logarithmic functions (integral of 1/x and f prime / f)",
-          "Applications to areas and rates",
-          "Calculus with logarithms to other bases"
+          "5A Review of the exponential function base e",
+          "5B Differentiation involving exponential functions",
+          "5C Applications of differentiation",
+          "5D Integration involving exponential functions",
+          "5E Applications of integration",
+          "5F Exponential functions with other bases"
         ]
       },
       {
         "num": "6",
-        "name": "The Trigonometric Functions Calculus",
+        "name": "Logarithmic Functions",
         "subtopics": [
-          "Trigonometric graphs and modelling (sine and cosine waves)",
-          "Differentiation of sin(f(x)), cos(f(x)), tan(f(x))",
-          "Applications of trig differentiation",
-          "Integration of sin(kx), cos(kx), sec^2(kx)",
-          "Applications of trig integration to areas and kinematics"
+          "6A Review of the logarithmic function base e",
+          "6B Differentiation involving logarithmic functions",
+          "6C Applications of differentiation",
+          "6D Integration involving reciprocal functions",
+          "6E Applications of integration",
+          "6F Calculus with logarithms to other bases"
         ]
       },
       {
         "num": "7",
-        "name": "Motion and Rates",
+        "name": "The Trigonometric Functions",
         "subtopics": [
-          "Displacement, velocity, acceleration as derivatives and integrals",
-          "Particle motion on a line",
-          "Rates of change and related physical rates",
-          "Differential equations of exponential growth and decay"
+          "7A Trigonometric graphs and modelling",
+          "7B Differentiation with trigonometric functions",
+          "7C Applications of differentiation",
+          "7D Integration with trigonometric functions",
+          "7E Applications of integration",
+          "7F Proving that the derivative of sin x is cos x"
         ]
       },
       {
         "num": "8",
+        "name": "Motion and Rates",
+        "subtopics": [
+          "8A Motion review plus acceleration",
+          "8B Motion and integration",
+          "8C Rates and differentiation",
+          "8D Rates and integration",
+          "8E Exponential growth and decay"
+        ]
+      },
+      {
+        "num": "15",
         "name": "Series and Finance",
         "subtopics": [
-          "Applications of APs and GPs to financial models",
-          "Simple and compound interest",
-          "Investing money by regular instalments (future value of annuities)",
-          "Paying off loans by instalments (present value)",
-          "Superannuation and pension calculations"
+          "15A Applications of APs and GPs",
+          "15B The use of logarithms with GPs",
+          "15C Simple and compound interest",
+          "15D Investing money by regular instalments",
+          "15E Paying off a loan",
+          "15F The pension from a super fund or annuity"
         ]
       },
       {
-        "num": "9",
+        "num": "16",
         "name": "Discrete Probability Distributions",
         "subtopics": [
-          "The language of discrete probability distributions",
-          "Discrete random variables and probability mass functions P(X = x)",
-          "Probability distribution tables",
-          "Mean or expected value E(X) = mu = sum(x P(X=x))",
-          "Variance Var(X) = sigma^2 = E(X^2) - (E(X))^2",
-          "Standard deviation of a discrete distribution"
+          "16A The language of probability distributions",
+          "16B Mean or expected value",
+          "16C Variance and standard deviation"
         ]
       },
       {
-        "num": "10",
+        "num": "17",
         "name": "Continuous Probability Distributions",
         "subtopics": [
-          "Continuous random variables and probability density functions (PDF)",
-          "Properties of PDFs (integral of f(x) = 1)",
-          "Calculating probabilities as areas under PDF curves",
-          "Mean, variance and standard deviation of continuous distributions",
-          "The standard normal distribution and z-scores",
-          "General normal distribution and empirical rule",
-          "Applications of the normal distribution"
+          "17A Cumulative frequency and grouping",
+          "17B Continuous distributions",
+          "17C Mean and variance of a distribution",
+          "17D The standard normal distribution",
+          "17E General normal distributions",
+          "17F Applications of the normal distribution"
         ]
       }
     ],
@@ -670,93 +714,90 @@
     "year": "Year 12",
     "subject": "Maths",
     "level": "Extension 1",
-    "textbook": "CambridgeMATHS Stage 6 NSW Mathematics Extension 1 Year 12 (2nd Edition, 2025/2026)",
+    "textbook": "CambridgeMATHS NSW Stage 6 Mathematics Extension 1 Year 12, 2nd Edition (Extension 1 chapters)",
     "chapters": [
       {
-        "num": "1",
+        "num": "2",
         "name": "Mathematical Induction",
         "subtopics": [
-          "Principle of Mathematical Induction",
-          "Induction proofs for series and sums",
-          "Induction proofs for divisibility"
+          "2A Using mathematical induction for series",
+          "2B Proving divisibility by mathematical induction"
         ]
       },
       {
-        "num": "2",
+        "num": "9",
         "name": "Vectors",
         "subtopics": [
-          "Directed line segments and vector definitions in 2D",
-          "Components and column vectors in 2D",
-          "The dot product (scalar product) in 2D",
-          "Coordinates in 3-dimensional space (x, y, z)",
-          "Vectors in three dimensions (xi + yj + zk)",
-          "The dot product in 3-dimensional space",
-          "Vector projections in 2D and 3D"
+          "9A Directed line segments and vectors",
+          "9B Components and column vectors",
+          "9C The dot product (or scalar product)",
+          "9D Coordinates in 3-dimensional space",
+          "9E Vectors in three dimensions",
+          "9F The dot product in 3-dimensional space",
+          "9G Projections"
         ]
       },
       {
-        "num": "3",
+        "num": "10",
         "name": "Vectors and Motion",
         "subtopics": [
-          "Displacement and velocity with vectors",
-          "Calculus and acceleration with vectors",
-          "Resultants and relative velocity",
-          "Projectile motion: Time equations of motion",
-          "Projectile motion: Cartesian equation of path and trajectory properties"
+          "10A Displacement and velocity with vectors",
+          "10B Calculus and acceleration with vectors",
+          "10C Resultants and relative velocity",
+          "10D Projectile motion - the time equations",
+          "10E Projectile motion - the equation of path"
         ]
       },
       {
-        "num": "4",
+        "num": "11",
         "name": "Inverse Trigonometric Functions",
         "subtopics": [
-          "Defining inverse trigonometric functions (arcsin, arccos, arctan)",
-          "Domains, ranges and properties of inverse trig functions",
-          "Graphs involving inverse trigonometric functions"
+          "11A Defining the inverse trigonometric functions",
+          "11B Graphs involving inverse trigonometric functions"
         ]
       },
       {
-        "num": "5",
+        "num": "12",
         "name": "Further Calculus Skills",
         "subtopics": [
-          "Parametric differentiation",
-          "Differentiating inverse functions",
-          "Differentiating inverse trigonometric functions",
-          "Integration yielding inverse trigonometric functions",
-          "Integration by algebraic substitution",
-          "Further integration by trigonometric substitution",
-          "Further trigonometric integrals"
+          "12A Parametric differentiation",
+          "12B Differentiating inverse functions",
+          "12C Differentiating inverse trigonometric functions",
+          "12D Integration using inverse trigonometric functions",
+          "12E Integration by substitution",
+          "12F Further integration by substitution",
+          "12G Further trigonometric integrals"
         ]
       },
       {
-        "num": "6",
+        "num": "13",
         "name": "Further Applications of Calculus",
         "subtopics": [
-          "Review of sketching polynomials",
-          "Testing polynomial zeroes for multiplicity",
-          "Related rates of change",
-          "Modified exponential growth and decay models",
-          "Volumes of solids of revolution by slicing"
+          "13A Review of sketching polynomials",
+          "13B Testing polynomial zeroes for multiplicity",
+          "13C Related rates",
+          "13D Modified exponential growth and decay",
+          "13E Volumes of rotation"
         ]
       },
       {
-        "num": "7",
+        "num": "14",
         "name": "Differential Equations",
         "subtopics": [
-          "First-order differential equations introduction",
-          "Slope fields (direction fields)",
-          "Separable differential equations",
-          "Differential equations of the form dy/dx = f(y)",
-          "Applications of differential equations to population, cooling, and dilution"
+          "14A Differential equations",
+          "14B Slope fields",
+          "14C Separable differential equations",
+          "14D y' = g(y) and logistic differential equations",
+          "14E Applications of differential equations"
         ]
       },
       {
-        "num": "8",
-        "name": "Binomial Distributions and Central Limit Theorem",
+        "num": "18",
+        "name": "Binomial Distributions and the Central Limit Theorem",
         "subtopics": [
-          "Binomial probability experiments",
-          "Binomial distributions (mean np, variance np(1-p))",
-          "Normal approximation to the binomial distribution",
-          "The Central Limit Theorem"
+          "18A Binomial probability",
+          "18B Binomial distributions",
+          "18C The central limit theorem"
         ]
       }
     ],
@@ -781,90 +822,94 @@
     "year": "Year 12",
     "subject": "Maths",
     "level": "Extension 2",
-    "textbook": "CambridgeMATHS Stage 6 NSW Mathematics Extension 2 Year 12 (2nd Edition, 2025/2026)",
+    "textbook": "CambridgeMATHS NSW Stage 6 Mathematics Extension 2 Year 12, 2nd Edition",
     "chapters": [
       {
         "num": "1",
         "name": "Complex Numbers I",
         "subtopics": [
-          "Arithmetic of complex numbers",
-          "Quadratic equations with complex coefficients",
-          "The Argand diagram",
-          "Modulus-argument form (r cis theta)",
-          "Vectors in the complex plane",
-          "Curves and regions in the Argand diagram"
+          "1A The Arithmetic of Complex Numbers",
+          "1B Quadratic Equations",
+          "1C The Argand Diagram",
+          "1D Modulus-Argument Form",
+          "1E Vectors and the Complex Plane",
+          "1F Curves and Regions in the Argand Diagram"
         ]
       },
       {
         "num": "2",
         "name": "Proof",
         "subtopics": [
-          "Logic and the language of proof (implication, equivalence, quantifiers)",
-          "Further logic and language of proof",
-          "Number proofs (divisibility, primes, rational/irrational)",
-          "Proof by contraposition and contradiction",
-          "Algebraic inequalities (AM-GM inequality, Cauchy-Schwarz)",
-          "Further proof by induction",
-          "Inequalities in geometry and calculus"
+          "2A Logic and the Language of Proof",
+          "2B Further Logic and Language of Proof",
+          "2C Number Proofs",
+          "2D Proof by Contraposition and by Contradiction",
+          "2E Algebraic Inequalities",
+          "2F Further Proof by Induction",
+          "2G Inequalities in Geometry and Calculus"
         ]
       },
       {
         "num": "3",
-        "name": "Complex Numbers II",
+        "name": "Complex Numbers II: Polynomials and de Moivre",
         "subtopics": [
-          "Polynomials and complex numbers (Fundamental Theorem of Algebra, conjugate root theorem)",
-          "Powers of complex numbers and de Moivres theorem",
-          "Trigonometric identities via de Moivre",
-          "Roots of complex numbers and nth roots of unity"
+          "3A Polynomials and Complex Numbers",
+          "3B Powers of Complex Numbers",
+          "3C Trigonometric Identities",
+          "3D Roots of Complex Numbers"
         ]
       },
       {
         "num": "4",
-        "name": "Further Work with Vectors",
+        "name": "Vectors",
         "subtopics": [
-          "Vector equation of a line in 2D and 3D",
-          "Parallel, intersecting and skew lines",
-          "Perpendicular lines in 3D",
-          "Vector equations of circles and spheres",
-          "Other parametric curves",
-          "The algebra of the dot product",
-          "Vector Proofs in 2D (vectors and geometry in two dimensions)",
-          "Vector Proofs in 3D (vectors and geometry in three dimensions)"
+          "4A The Vector Equation of a Line",
+          "4B Parallel, Intersecting and Skew Lines",
+          "4C Perpendicular Lines",
+          "4D Vector Equations of Circles and Spheres",
+          "4E Other Parametric Curves",
+          "4F The Algebra of the Dot Product",
+          "4G Vectors and Geometry in Two Dimensions",
+          "4H Vectors and Geometry in Three Dimensions"
         ]
       },
       {
         "num": "5",
         "name": "Trigonometric Identities",
         "subtopics": [
-          "Products to sums and sums to products trigonometric identities",
-          "The t-formulae (t = tan(theta/2)) substitutions and applications"
+          "5A Products to Sums",
+          "5B The t-Formulae"
         ]
       },
       {
         "num": "6",
         "name": "Integration",
         "subtopics": [
-          "Standard integrals review",
-          "Algebraic manipulation in integration",
-          "Integration by substitution",
-          "Partial fractions (linear and quadratic factors)",
-          "Integration by parts",
-          "Trigonometric integrals and reduction formulae",
-          "Miscellaneous harder integrals"
+          "6A The Standard Integrals",
+          "6B Algebraic Manipulation",
+          "6C Substitution",
+          "6D Partial Fractions",
+          "6E Denominators with Quadratics",
+          "6F Integration by Parts",
+          "6G Trigonometric Integrals",
+          "6H Reduction Formulae",
+          "6I Miscellaneous Integrals"
         ]
       },
       {
         "num": "7",
         "name": "Mechanics",
         "subtopics": [
-          "Resolving forces in equilibrium",
-          "Inclined planes and pulleys",
-          "Forces and acceleration (F = ma)",
-          "Simple Harmonic Motion (SHM) with time",
-          "Simple Harmonic Motion (SHM) with displacement",
-          "Horizontal resisted motion",
-          "Vertical resisted motion (terminal velocity)",
-          "Resisted projectile motion"
+          "7A Resolving Forces",
+          "7B Planes and Pulleys",
+          "7C Forces and Acceleration",
+          "7D Simple Harmonic Motion and Time",
+          "7E Simple Harmonic Motion and Displacement",
+          "7F Horizontal Resisted Motion",
+          "7G Vertical Resisted Motion",
+          "7H Projectile Motion - Further Extension 1",
+          "7I Resisted Projectile Motion",
+          "7J Miscellaneous Problems"
         ]
       }
     ],

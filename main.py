@@ -357,7 +357,7 @@ def clean_redundant_topic_prefix(topic_str: str, year: str = "", subject: str = 
         return ""
     s = str(topic_str).replace("_", " ").strip()
     s = re.sub(r"^\[Year\s*\d+\]\s*", "", s, flags=re.IGNORECASE).strip()
-    s = re.sub(r"\s*\((?:Yr|Year)\s*\d+\)$", "", s, flags=re.IGNORECASE).strip()
+    s = re.sub(r"\s*\((?:Yr|Year)\s*\d+(?:,\s*[^)]*)?\)$", "", s, flags=re.IGNORECASE).strip()
     s = re.sub(r"^\d+[\.\-]\s*", "", s).strip()
     s = re.sub(r"^(?:NESA\s*(?:Syllabus)?[\s\-_:]*)+", "", s, flags=re.IGNORECASE).strip()
 
@@ -766,7 +766,7 @@ def _read_files_in_dir(directory: str) -> list:
 def load_style_samples(year: str, subject: str, difficulty: str, topic: str) -> tuple:
     parent_path = get_parent_path(year, subject, difficulty)
     topic_clean = re.sub(r"^\[Year\s*\d+\]\s*", "", topic, flags=re.IGNORECASE).strip() if topic else ""
-    topic_clean = re.sub(r"\s*\((?:Yr|Year)\s*\d+\)$", "", topic_clean, flags=re.IGNORECASE).strip() if topic_clean else ""
+    topic_clean = re.sub(r"\s*\((?:Yr|Year)\s*\d+(?:,\s*[^)]*)?\)$", "", topic_clean, flags=re.IGNORECASE).strip() if topic_clean else ""
     topic_path = os.path.join(parent_path, topic_clean) if topic_clean else ""
 
     if not (topic_path and os.path.exists(topic_path)) and os.path.exists(parent_path) and topic_clean:
@@ -1729,13 +1729,13 @@ def audit_exam_with_deepseek(
         "   - Is every question mathematically unambiguous, well-formed, and completely solvable?\n"
         "   - Are all numerical values and geometric conditions consistent (no unintended real-number domain violations like negative square roots, division by zero, or degenerate triangles)?\n"
         "   - Are the provided answers in the answer key mathematically verified and accurate?\n"
-        "2. POST-2019 NESA SYLLABUS BOUNDARY COMPLIANCE (CRITICAL):\n"
+        "2. CURRENT NESA SYLLABUS BOUNDARY COMPLIANCE (CRITICAL):\n"
         "   - Even for 'Hard' or 'Extremely Hard' questions, you must NEVER allow concepts, formulas, or techniques outside the official NSW HSC syllabus. If a question introduces university-level math, competition math tricks, or out-of-scope methods to increase difficulty, flag it for REVISION.\n"
         "   - Adhere strictly to the course syllabus boundaries:\n"
         "     * Universal bans: Pigeonhole Principle, internal/external division of an interval, and Euclidean circle geometry proofs are STRICTLY BANNED across ALL courses.\n"
-        "     * Year 11 & 12 Mathematics Extension 1: Vector proofs (geometric proofs using vectors) are STRICTLY BANNED (they belong exclusively in Extension 2). The t-formulae (t = tan(x/2)) and product-to-sum identities are STRICTLY BANNED (Ext 2 only). 3D vectors ARE included.\n"
-        "     * Year 11 & 12 Mathematics Advanced: 3D Trigonometry is STRICTLY BANNED (Ext 1 only). No vectors, no projectile motion, no complex numbers, no induction.\n"
-        "     * Year 11 vs Year 12 boundaries: Discrete random variables are Year 12 Advanced (banned in Year 11). Networks are Year 11 Standard (Year 12 Standard covers CPA).\n"
+        "     * For Extension 1 selections without Extension 2: vector proofs, t-formulae and product-to-sum identities are outside the selected course. 3D vectors are included.\n"
+        "     * For Advanced selections without an Extension level: 3D trigonometry, vectors, projectile motion, complex numbers and induction are outside the selected course. Apply the combined selected-course scope when multiple levels are selected.\n"
+        "     * Year 11 vs Year 12 boundaries: Discrete random variables are Year 12 Advanced (banned in Year 11). Basic network concepts are Year 11 Standard review; Year 12 Standard includes critical path analysis and network flow.\n"
         "3. DIAGRAM INTEGRITY:\n"
         "   - If any question refers to a figure, geometric shape, or diagram (e.g. 'In the diagram below', 'The figure shows'), verify that a valid rendered diagram (TikZ or Python graph) is present.\n"
         "4. QUESTION SPECIFICATIONS:\n"
@@ -1933,6 +1933,8 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
         year_group = params.get("year_group", [])
         subject = params.get("subject", "Maths")
         actual_level = params.get("actual_level", "")
+        actual_levels = params.get("actual_levels") or ([actual_level] if actual_level else [])
+        policy_level = next((level for level in ("Extension 2", "Extension 1", "Extension", "Advanced", "Standard") if level in actual_levels), actual_level)
         clean_topic = params.get("clean_topic", "General")
         sub_topic = params.get("sub_topic", "")
         grades_string = params.get("grades_string", ", ".join(year_group))
@@ -2005,17 +2007,17 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
                 "(5) Simpson's Rule."
             )
             level_ban = ""
-            if actual_level == "Advanced":
+            if policy_level == "Advanced":
                 level_ban = (
                     " CRITICAL ADVANCED LEVEL BANS: "
                     "(1) 3D TRIGONOMETRY IS STRICTLY BANNED — Year 11 & 12 Advanced only covers 2D Trigonometry (Sine rule, Cosine rule, Area of triangle, Radians). 3D Trigonometry is exclusively an Extension 1 topic. "
                     "(2) DO NOT include Extension 1/2 topics: t-method / t-formulae (t = tan(x/2)), Product-to-sum / sum-to-product (differences) identities, Compound/Double Angles (sin(A+B), cos(2A)), Auxiliary angle method (Rcos(x-a)), Inverse Trig functions, Polynomial division / Remainder theorem / Sum and product of roots, Combinatorics / Permutations & Combinations, Vectors, Projectile Motion, Mathematical Induction, Perpendicular Distance formula, Angle between two lines."
                 )
-            elif actual_level == "Standard":
+            elif policy_level == "Standard":
                 level_ban = (
                     " CRITICAL STANDARD LEVEL BANS: 3D Trigonometry is STRICTLY BANNED. NO Calculus, NO Radians, NO Advanced Polynomials, NO Logarithm laws, NO Compound/Double angle trigonometry, NO t-method/t-formulae, NO product-to-sum identities. Keep all math strictly within the NSW Mathematics Standard syllabus."
                 )
-            elif actual_level in ["Extension", "Extension 1"]:
+            elif policy_level in ["Extension", "Extension 1"]:
                 level_ban = (
                     " EXTENSION 1 SYLLABUS RULES: 3D Trigonometry IS ALLOWED & REQUIRED for 3D trig topics (ME-T1). "
                     "VECTORS IN EXTENSION 1: Year 12 Extension 1 Vectors explicitly includes BOTH 2D Vectors and 3D Vectors (3D component form xi + yj + zk, column vectors, 3D magnitude, 3D dot/scalar product, angles between vectors in 3D, and parallel and perpendicular vectors in 3D). "
@@ -2025,7 +2027,7 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
                     "- REMEMBER: Euclidean circle proofs, division of an interval, and the Pigeonhole Principle are strictly banned in Extension 1. "
                     "- DO NOT include Extension 2 exclusive topics (Complex Numbers, Proof by Contradiction/Contrapositive, Integration by Parts, Volumes by Slicing & Cylindrical Shells, Mechanics/Resisted Motion, Geometric Vector Proofs)."
                 )
-            elif actual_level in ["Extension 2"]:
+            elif policy_level == "Extension 2":
                 level_ban = (
                     " EXTENSION 2 SYLLABUS RULES: Follow the Mathematics Extension 2 syllabus: Proof (Nature of Proof, Vector Proofs / Geometric proofs using vectors), Vectors (Further 3D Vectors, vector equations of lines/curves, 3D vector geometry proofs), Complex Numbers, Calculus (Further Integration, Volumes by Slicing & Cylindrical Shells), Mechanics (Resisted Motion, Simple Harmonic Motion). "
                     "NOTE ON TRIGONOMETRY: The t-method / t-formulae (t = tan(x/2) substitutions) and product-to-sum and sum-to-product (differences) trigonometric identities belong EXCLUSIVELY in Maths Extension 2 (e.g. in Further Integration and Advanced Proofs/Identities). "
@@ -2034,21 +2036,21 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
 
             yr_ban = ""
             if "Year 11" in year_group and "Year 12" not in year_group:
-                if actual_level == "Standard":
+                if policy_level == "Standard":
                     yr_ban = (
                         " YEAR 11 STANDARD BOUNDARIES: "
                         "(1) NETWORKING / NETWORK CONCEPTS IS NOW IN YEAR 11 STANDARD: Networks, vertices, edges, degrees, directed/undirected graphs, walks, trails, paths, circuits, cycles, Eulerian and Hamiltonian paths/circuits, trees, minimum spanning trees (Prim's algorithm), and shortest paths are explicitly INCLUDED in Year 11 Maths Standard. "
                         "(2) RELATIVE FREQUENCY MOVED TO YEAR 12: DO NOT generate Relative Frequency in Year 11 Maths Standard (Relative Frequency has moved to Year 12 Maths Standard). "
                         "(3) DO NOT generate Year 12 Standard topics: Normal Distribution, Z-scores, Annuities, Depreciation, Critical Path Analysis, Bivariate Data. DO NOT require manual calculation of standard deviation."
                     )
-                elif actual_level == "Advanced":
+                elif policy_level == "Advanced":
                     yr_ban = (
                         " YEAR 11 ADVANCED BOUNDARIES: "
                         "(1) DATA IS INCLUDED IN YEAR 11 ADVANCED: Single-variable data analysis, summary statistics (mean, median, mode, range, IQR, standard deviation), quartiles, box plots, frequency histograms, and identifying outliers are explicitly part of Year 11 Maths Advanced. "
                         "(2) NO DISCRETE PROBABILITY DISTRIBUTIONS: Discrete Probability Distributions and Discrete Random Variables are STRICTLY BANNED from Year 11 Maths Advanced (they belong in Year 12 Maths Advanced). "
                         "(3) DO NOT generate Year 12 Advanced topics: NO Integration / Area under curves / Volumes of revolution, NO Financial Mathematics (Superannuation, Annuities, Series loan repayments), NO Continuous Random Variables / Normal Distribution, NO Bivariate Data Analysis, NO Calculus applications to exponentials or trigonometrics. Year 11 differentiation is strictly limited to First Principles, Power Rule on polynomials, and basic Tangents/Normals."
                     )
-                elif actual_level in ["Extension", "Extension 1"]:
+                elif policy_level in ["Extension", "Extension 1"]:
                     yr_ban = (
                         " YEAR 11 EXTENSION 1 BOUNDARIES: "
                         "(1) NO PIGEONHOLE PRINCIPLE: The Pigeonhole Principle is strictly banned and removed from Year 11 Extension 1 Combinatorics. "
@@ -2056,18 +2058,18 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
                         "(3) DO NOT generate Year 12 Extension 1 topics: NO Proof by Mathematical Induction, NO Projectile Motion (Vectors), NO Trigonometric Equations via Auxiliary Angle Rcos(x-a), NO Differential Equations / Exponential Growth, NO Calculus of Inverse Trig Functions, NO Binomial Distribution / Normal Approximation. Year 11 Ext 1 is strictly limited to Functions & Polynomials, Further Trigonometry (3D Trig, Compound/Double angles), Permutations & Combinations (without Pigeonhole Principle), Vectors in 2D, and Rates of Change."
                     )
             elif "Year 12" in year_group:
-                if actual_level == "Standard":
+                if policy_level == "Standard":
                     yr_ban = (
                         " YEAR 12 STANDARD BOUNDARIES: "
                         "(1) RELATIVE FREQUENCY IS IN YEAR 12 STANDARD: Relative frequency, experimental probability, multi-stage events, simulations, and expected frequency belong in Year 12 Maths Standard. "
-                        "(2) NETWORK CONCEPTS MOVED TO YEAR 11: Basic Network Concepts (vertices, edges, walks, Eulerian/Hamiltonian, minimum spanning trees, shortest paths) belongs in Year 11 Maths Standard. Year 12 Standard covers Critical Path Analysis (CPA) / Project Planning."
+                        "(2) Basic network concepts, minimum spanning trees and shortest paths appear as Year 11 review in the Year 12 textbook; include those review sections only when explicitly selected. Year 12 content includes Critical Path Analysis and Network Flow."
                     )
-                elif actual_level == "Advanced":
+                elif policy_level == "Advanced":
                     yr_ban = (
                         " YEAR 12 ADVANCED BOUNDARIES: "
                         "DISCRETE PROBABILITY DISTRIBUTIONS IS INCLUDED IN YEAR 12 ADVANCED: Discrete Probability Distributions, discrete random variables, probability mass functions P(X = x), probability distribution tables, expected value E(X) = mu, and variance Var(X) = sigma^2 are explicitly part of Year 12 Maths Advanced (alongside Continuous Probability Distributions and Normal Distribution)."
                     )
-                elif actual_level in ["Extension", "Extension 1"]:
+                elif policy_level in ["Extension", "Extension 1"]:
                     yr_ban = (
                         " YEAR 12 EXTENSION 1 BOUNDARIES: "
                         "(1) 3D VECTORS ARE EXPLICITLY INCLUDED: Year 12 Mathematics Extension 1 Vectors explicitly includes questions on 3D Vectors (three-dimensional components in xi + yj + zk or column vectors, magnitude in 3D, addition/subtraction, scalar multiplication, dot/scalar product in 3D, angles between 3D vectors, and parallel/perpendicular conditions in 3D). Ensure that questions on Vectors in Year 12 Extension 1 include 3D vectors as well as 2D vectors! "
@@ -2077,29 +2079,30 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
                     )
 
             syllabus_ban = (
-                f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {actual_level} syllabus.{universal_ban}{level_ban}{yr_ban}\n"
+                f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the current NESA {grades_string} {actual_level} syllabus and the selected textbook chapters.{universal_ban}{level_ban}{yr_ban}\n"
                 "CRITICAL DIFFICULTY BOUNDARY: NEVER include concepts, theorems, or techniques outside the official NSW HSC syllabus, even for Hard and Extremely Hard questions. "
                 "High difficulty MUST come from deep conceptual synthesis, multi-stage reasoning, and novel framing WITHIN the syllabus — NEVER from university mathematics, competition math tricks, or out-of-syllabus methods."
             )
         else:
-            syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the post-2019 NESA {grades_string} {subject} syllabus. Ensure all diagrams, notations, reaction rates, equilibrium graphs, and scientific concepts follow official NSW HSC curriculum standards."
+            syllabus_ban = f"11. SYLLABUS STRICTNESS (CRITICAL): Strictly adhere to the current NESA {grades_string} {subject} syllabus. Ensure all diagrams, notations, reaction rates, equilibrium graphs, and scientific concepts follow official NSW HSC curriculum standards."
 
         # Manifest grounding across all selected years
         manifest_data = load_syllabus_manifest()
         matched_courses = []
         for y in year_group:
-            lvl_cands = resolve_level_for_year(y, subject, actual_level)
-            course_for_y = None
-            for cand in lvl_cands:
-                cand_keys = [f"{y} {subject} {cand}".strip(), f"{y} {subject}".strip()]
-                for ck in cand_keys:
-                    if ck in manifest_data:
-                        course_for_y = manifest_data[ck]
+            for selected_level in (actual_levels or [""]):
+                lvl_cands = resolve_level_for_year(y, subject, selected_level)
+                course_for_y = None
+                for cand in lvl_cands:
+                    cand_keys = [f"{y} {subject} {cand}".strip(), f"{y} {subject}".strip()]
+                    for ck in cand_keys:
+                        if ck in manifest_data:
+                            course_for_y = manifest_data[ck]
+                            break
+                    if course_for_y:
                         break
-                if course_for_y:
-                    break
-            if course_for_y and course_for_y not in matched_courses:
-                matched_courses.append(course_for_y)
+                if course_for_y and course_for_y not in matched_courses:
+                    matched_courses.append(course_for_y)
 
         if matched_courses:
             manifest_context = ""
@@ -2108,13 +2111,14 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
                 ch_list = [f"- Chapter {c['num']}: {c['name']} (Subtopics: {', '.join(c.get('subtopics', []))})" for c in matched_course.get("chapters", [])]
                 inclusions = matched_course.get("inclusions", [])
                 exclusions = matched_course.get("exclusions", [])
-                manifest_context += f"\n\nOFFICIAL SYLLABUS TEXTBOOK BENCHMARK ({textbook_ref}):\n"
+                manifest_context += f"\n\nSELECTED COURSE: {matched_course.get('year', '')} {matched_course.get('level', '')}. TEXTBOOK BENCHMARK ({textbook_ref}):\n"
                 manifest_context += "The following are the authoritative chapters and granular subtopics for this course:\n" + "\n".join(ch_list) + "\n"
                 if inclusions:
-                    manifest_context += "\nMANDATORY INCLUSIONS:\n" + "\n".join([f"• {inc}" for inc in inclusions]) + "\n"
-                if exclusions:
+                    manifest_context += "\nCOURSE SCOPE NOTES:\n" + "\n".join([f"• {inc}" for inc in inclusions]) + "\n"
+                if exclusions and len(actual_levels) <= 1:
                     manifest_context += "\nSTRICT EXCLUSIONS & BANS:\n" + "\n".join([f"• {exc}" for exc in exclusions]) + "\n"
             syllabus_ban += manifest_context
+            syllabus_ban += "\nThe selected topics and subtopics in the exam focus define the question scope. Other textbook chapters are reference only.\n"
 
         dist_req = []
         if num_mc > 0:
@@ -2128,7 +2132,7 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
         if num_xh > 0:
             dist_req.append(f"{num_xh} Extremely Hard Free-Response questions")
 
-        exam_focus = f"{clean_topic}" + (f" - specifically focusing on: {sub_topic}" if sub_topic else "")
+        exam_focus = clean_topic if not sub_topic or sub_topic in clean_topic else f"{clean_topic} - specifically focusing on: {sub_topic}"
         style_block = f"STYLE & SYLLABUS REFERENCE:\n{style_samples}\n\n" if style_samples else ""
         custom_instructions_block = f"EXTRA TUTOR INSTRUCTIONS:\n{extra_instructions}\n\n" if extra_instructions.strip() else ""
 
@@ -4165,46 +4169,48 @@ with c3:
     else:
         level_opts = ["N/A"]
         level_disabled = True
-    level = st.selectbox("Level", level_opts, disabled=level_disabled)
+    if subject == "Maths" and not level_disabled:
+        actual_levels = st.multiselect("Level", level_opts, help="Select all courses to include in this exam.")
+    else:
+        level = st.selectbox("Level", level_opts, disabled=level_disabled)
+        actual_levels = [] if level == "N/A" else [level]
 
-actual_level = "" if level == "N/A" else level
+actual_level = " + ".join(actual_levels)
 
 available_topics = []
+topic_subtopics = {}
 manifest_data = load_syllabus_manifest()
 
 for y in year_group:
-    y_topics = []
-    lvl_cands = resolve_level_for_year(y, subject, actual_level)
-
-    # 1. Try sample folders for this year
-    for cand in lvl_cands:
-        p_path = get_parent_path(y, subject, cand)
-        raw_dirs = get_available_topics(p_path)
-        real_dirs = [d for d in raw_dirs if d not in LEVEL_NAMES]
-        if real_dirs:
-            y_topics = sorted(real_dirs, key=lambda x: [int(c) if c.isdigit() else c for c in re.split(r"(\d+)", x)])
-            break
-
-    # 2. Seamless per-year fallback to syllabus manifest if folder topics are empty
-    if not y_topics:
+    for selected_level in (actual_levels or ([""] if subject != "Maths" or y not in ("Year 11", "Year 12", "Year 9", "Year 10") else [])):
+        lvl_cands = resolve_level_for_year(y, subject, selected_level)
+        course = None
         for cand in lvl_cands:
-            candidate_keys = [
-                f"{y} {subject} {cand}".strip(),
-                f"{y} {subject}".strip()
-            ]
-            for ck in candidate_keys:
+            for ck in (f"{y} {subject} {cand}".strip(), f"{y} {subject}".strip()):
                 if ck in manifest_data:
-                    y_topics = [f"{c['num']}. {c['name']}" for c in manifest_data[ck].get("chapters", [])]
+                    course = manifest_data[ck]
                     break
-            if y_topics:
+            if course:
                 break
 
-    yr_num = re.sub(r"\D", "", y)
-    yr_badge = f"(Yr {yr_num})" if yr_num else f"({y})"
-    for t in y_topics:
-        available_topics.append(f"{t} {yr_badge}")
+        # Year 12 Maths follows the supplied textbook chapters even when sample folders exist.
+        use_manifest = y == "Year 12" and subject == "Maths" and course is not None
+        y_topics = [] if use_manifest else sorted(
+            [d for d in get_available_topics(get_parent_path(y, subject, selected_level)) if d not in LEVEL_NAMES],
+            key=lambda x: [int(c) if c.isdigit() else c for c in re.split(r"(\d+)", x)],
+        )
+        if not y_topics and course:
+            y_topics = [f"{c['num']}. {c['name']}" for c in course.get("chapters", [])]
 
-available_topics = sorted(list(set(available_topics)), key=lambda x: [int(c) if c.isdigit() else c for c in re.split(r"(\d+)", x)])
+        yr_num = re.sub(r"\D", "", y)
+        badge = f"Yr {yr_num}" + (f", {selected_level}" if selected_level else "")
+        for t in y_topics:
+            label = f"{t} ({badge})"
+            if label not in topic_subtopics:
+                available_topics.append(label)
+                chapter_name = re.sub(r"^\d+[.\-]\s*", "", t).strip()
+                chapter = next((c for c in (course or {}).get("chapters", []) if c["name"].casefold() == chapter_name.casefold()), None)
+                topic_subtopics[label] = chapter.get("subtopics", []) if chapter else []
 
 c4, c5, c6 = st.columns([3, 2, 1])
 with c4:
@@ -4233,7 +4239,13 @@ with c4:
         )
         topic = [custom_topic_text.strip()] if custom_topic_text.strip() else []
 with c5:
-    sub_topic = st.text_input("Specific Sub-topic (Optional)", placeholder="e.g. Slope Fields")
+    subtopic_options = [f"{section} — {selected_topic}" for selected_topic in selected_topics for section in topic_subtopics.get(selected_topic, [])] if available_topics else []
+    if subtopic_options:
+        selected_subtopics = st.multiselect("Subtopics (Optional)", subtopic_options, key="sel_subtopics_multi")
+    else:
+        selected_subtopics = []
+    custom_subtopic = st.text_input("Or Custom Subtopic (Optional)", placeholder="e.g. Slope Fields")
+    sub_topic = ", ".join([item.split(" — ", 1)[0] for item in selected_subtopics] + ([custom_subtopic.strip()] if custom_subtopic.strip() else []))
 with c6:
     set_number_input = st.number_input(
         "Set #",
@@ -4334,18 +4346,21 @@ safe_topic = topic[0] if isinstance(topic, list) and len(topic) > 0 else (topic 
 combined_samples = []
 msgs = []
 for y in year_group:
-    target_topic = safe_topic
-    yr_num = re.sub(r"\D", "", y)
-    if isinstance(topic, list) and len(topic) > 0:
-        matching_for_y = [t for t in topic if f"[{y}]" in t or re.search(rf"\((?:Yr|Year)\s*{yr_num}\)", t, re.IGNORECASE)]
-        if matching_for_y:
-            target_topic = matching_for_y[0]
-        elif any(re.search(r"(\[Year\s*\d+\]|\((?:Yr|Year)\s*\d+\))", t, re.IGNORECASE) for t in topic):
-            target_topic = ""
-    s, m = load_style_samples(y, subject, actual_level, target_topic if available_topics or target_topic else "")
-    if s:
-        combined_samples.append(s)
-        msgs.append(f"{y}: {m.replace('✅ ', '').replace('⚠️ ', '')}")
+    for selected_level in (actual_levels or [""]):
+        target_topic = safe_topic
+        yr_num = re.sub(r"\D", "", y)
+        if isinstance(topic, list) and topic:
+            badge = f"(Yr {yr_num}" + (f", {selected_level}" if selected_level else "") + ")"
+            matching = [t for t in topic if t.endswith(badge)]
+            if matching:
+                target_topic = matching[0]
+            elif any(re.search(r"\((?:Yr|Year)\s*\d+", t, re.IGNORECASE) for t in topic):
+                target_topic = ""
+        s, m = load_style_samples(y, subject, selected_level, target_topic)
+        if s and s not in combined_samples:
+            combined_samples.append(s)
+            course_label = f"{y} {selected_level}".strip()
+            msgs.append(f"{course_label}: {m.replace('✅ ', '').replace('⚠️ ', '')}")
 
 style_samples = "\n\n---\n\n".join(combined_samples)[:10000]
 source_msg = "✅ " + " | ".join(msgs) if combined_samples else "❌ No samples found."
@@ -4398,6 +4413,7 @@ with btn_col2:
         for _key in _SS_KEYS:
             st.session_state[_key] = None
         st.session_state["sel_topics_multi"] = []
+        st.session_state["sel_subtopics_multi"] = []
         st.session_state["custom_topic_text"] = ""
         st.session_state["fallback_topic_text"] = ""
         st.session_state["pasted_photos"] = []
@@ -4411,6 +4427,8 @@ if generate_btn:
     has_upload = has_uploaded_photos or has_pasted_photos
     if not year_group:
         st.error("🚨 Action Required: Please select at least one **Year** group from the dropdown above.")
+    elif subject == "Maths" and not actual_levels and any(y in year_group for y in ("Year 9", "Year 10", "Year 11", "Year 12")):
+        st.error("🚨 Action Required: Please select at least one **Level**.")
     elif is_topic_empty and not has_upload:
         st.error("🚨 Action Required: Please enter or select a **Topic**, or upload/paste photo(s) for the AI to extract.")
     elif total_q == 0:
@@ -4431,7 +4449,7 @@ if generate_btn:
             topic_list = topic if isinstance(topic, list) else [topic]
             raw_t = ", ".join([
                 re.sub(r"^\d+[\.\-]\s*", "",
-                    re.sub(r"\s*\((?:Yr|Year)\s*\d+\)$", "",
+                    re.sub(r"\s*\((?:Yr|Year)\s*\d+(?:,\s*[^)]*)?\)$", "",
                         re.sub(r"^\[Year\s*\d+\]\s*", "", t, flags=re.IGNORECASE).strip(),
                     flags=re.IGNORECASE).strip()
                 ).strip() for t in topic_list
@@ -4472,6 +4490,7 @@ if generate_btn:
             "year_group": year_group,
             "subject": subject,
             "actual_level": actual_level,
+            "actual_levels": actual_levels,
             "clean_topic": clean_topic,
             "sub_topic": sub_topic,
             "grades_string": grades_string,
