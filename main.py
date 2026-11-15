@@ -3912,12 +3912,10 @@ def _get_exam_solutions_from_storage(pdf_url: str) -> str:
 
 
 def _change_library_exam_set_number(exam: dict, new_set: int) -> tuple[bool, str]:
-    """Rebuild and save a library exam with a new set number."""
+    """Rebuild saved files even if the listing already shows the requested set."""
     topic_str = exam.get("topic", "")
     match = re.search(r"\bSet\s*(\d+)\b", topic_str, re.IGNORECASE)
     old_set = int(match.group(1)) if match else 1
-    if new_set == old_set:
-        return True, f"This exam is already Set {new_set}."
     clean_topic = re.sub(r"\s*\(Yr[^)]*\)\s*Set\s*\d+.*$", "", topic_str, flags=re.IGNORECASE).strip()
     if clean_topic == topic_str and match:
         clean_topic = topic_str[:match.start()].strip()
@@ -4015,7 +4013,9 @@ def _change_library_exam_set_number(exam: dict, new_set: int) -> tuple[bool, str
             "pdf_bytes": pdf_bytes, "tex_bytes": tex_bytes, "word_bytes": word_bytes,
             "compiler_log": log, "word_skip_reason": word_reason,
         })
-    return True, f"Changed this exam to Set {new_set}."
+    if new_set == old_set:
+        return True, f"Rebuilt the PDF and Word file as Set {new_set}."
+    return True, f"Changed this exam and its files to Set {new_set}."
 
 
 def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
@@ -4401,8 +4401,17 @@ if app_mode == "📚 Exam Library":
                         # --- SET NUMBER EDIT SECTION ---
                         m_set = re.search(r"\bSet\s*(\d+)\b", exam.get("topic", ""), re.IGNORECASE)
                         cur_set = int(m_set.group(1)) if m_set else 1
+                        stale_files = []
+                        for label, file_url in (("PDF", exam.get("pdf_url")), ("Word file", exam.get("docx_url"))):
+                            if file_url:
+                                filename = os.path.basename(unquote(file_url.split("?")[0]))
+                                file_set = re.search(r"\bSet\s*(\d+)\b", filename, re.IGNORECASE)
+                                if file_set and int(file_set.group(1)) != cur_set:
+                                    stale_files.append(f"{label} still has Set {file_set.group(1)}")
 
                         st.markdown("---")
+                        if stale_files:
+                            st.warning("The library listing and saved files disagree: " + "; ".join(stale_files) + ". Click Rebuild Saved Files to correct them.")
                         set_col1, set_col2 = st.columns([2, 3], vertical_alignment="bottom")
                         with set_col1:
                             new_set_val = st.number_input(
@@ -4414,7 +4423,8 @@ if app_mode == "📚 Exam Library":
                                 help="Rebuild the PDF and Word file with this set number, then update the library record.",
                             )
                         with set_col2:
-                            if st.button("💾 Update Set #", key=f"btn_save_set_{exam['id']}"):
+                            set_button_label = "🔄 Rebuild Saved Files" if int(new_set_val) == cur_set else "💾 Update Set #"
+                            if st.button(set_button_label, key=f"btn_save_set_{exam['id']}"):
                                 with st.spinner("Rebuilding exam and updating saved files..."):
                                     ok, message = _change_library_exam_set_number(exam, int(new_set_val))
                                 if ok:
