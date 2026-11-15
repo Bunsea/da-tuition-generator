@@ -22,6 +22,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from exam_scope import build_exam_scope
+from cost_display import deepseek_cost_label
 
 try:
     from zoneinfo import ZoneInfo
@@ -605,8 +606,7 @@ def save_to_supabase(
                 data_to_save["cost"] = round(float(cost), 5)
                 if gemini_cost is not None:
                     data_to_save["gemini_cost"] = round(float(gemini_cost), 5)
-                if ds_cost is not None:
-                    data_to_save["ds_cost"] = round(float(ds_cost), 5)
+                data_to_save["ds_cost"] = round(float(ds_cost), 5) if ds_cost is not None else None
                 if model:
                     data_to_save["model"] = str(model)
             except (ValueError, TypeError):
@@ -2431,6 +2431,13 @@ When instructed, your final combined output must follow this template structure 
                         except Exception:
                             continue
 
+            else:
+                audit_res = {
+                    "status": "SKIPPED",
+                    "summary": "DeepSeek checking was skipped because no API key was configured.",
+                    "ds_cost": None,
+                }
+
         # Extract filename if AI suggested one
         fn_m = re.search(r"===?\s*FILENAME_START\s*===?(.*?)===?\s*FILENAME_END\s*===?", out, re.DOTALL | re.IGNORECASE)
         if fn_m and fn_m.group(1).strip():
@@ -2506,8 +2513,13 @@ When instructed, your final combined output must follow this template structure 
         out_cost = (out_tok / 1_000_000) * 3.75
         search_cost = 0.014 if used_search else 0.00
         gemini_cost = round(in_cost + out_cost + search_cost, 5)
-        ds_cost = round(float(audit_res.get("ds_cost", 0.0) if audit_res else 0.0), 5)
-        total_cost = round(gemini_cost + ds_cost, 5)
+        ds_usage = audit_res or {}
+        ds_cost = round(float(ds_usage["ds_cost"]), 5) if (
+            ds_usage.get("status") in ("APPROVED", "REVISION_NEEDED")
+            and (ds_usage.get("ds_in_tok") or ds_usage.get("ds_out_tok"))
+            and ds_usage.get("ds_cost") is not None
+        ) else None
+        total_cost = round(gemini_cost + (ds_cost or 0.0), 5)
 
         return {
             "success": True,
@@ -2572,6 +2584,7 @@ def submit_exam_job(params: dict, teacher_username: str = "") -> str:
             "total_q": params.get("total_q", 0),
             "meta_set": params.get("current_set_number", 1),
             "auto_solutions": params.get("auto_solutions", False),
+            "use_deepseek_auditor": params.get("use_deepseek_auditor", False),
             "created_at": datetime.now(timezone.utc),
             "created_by": params.get("created_by", "Teacher"),
             "computer_name": comp_name,
@@ -2666,7 +2679,7 @@ def _load_job_into_session_state(res: dict):
         "meta_output_tokens": res.get("meta_output_tokens", 0),
         "meta_total_cost": res.get("meta_total_cost", 0.0),
         "meta_gemini_cost": res.get("meta_gemini_cost", 0.0),
-        "meta_ds_cost": res.get("meta_ds_cost", 0.0),
+        "meta_ds_cost": res.get("meta_ds_cost"),
         "used_search": res.get("used_search", False),
         "phase_1_raw": res.get("phase_1_raw", ""),
         "saved_ai_payload": res.get("saved_ai_payload", []),
@@ -2810,15 +2823,15 @@ def render_exam_queue_dashboard():
         if cost_val is not None:
             try:
                 g_cost = res_data.get("meta_gemini_cost")
-                d_cost = float(res_data.get("meta_ds_cost") or 0.0)
+                d_cost = res_data.get("meta_ds_cost")
+                audit_status = (res_data.get("deepseek_audit") or {}).get("status")
+                if not audit_status and job.get("use_deepseek_auditor") is False:
+                    audit_status = "NOT_RUN"
                 if g_cost is None:
-                    g_cost = max(0.0, float(cost_val) - d_cost)
+                    g_cost = max(0.0, float(cost_val) - (d_cost or 0.0))
                 else:
                     g_cost = float(g_cost)
-                if d_cost > 0:
-                    meta_line += f" · 💸 ${float(cost_val):.4f} (Gemini: ${g_cost:.4f} · DeepSeek: ${d_cost:.4f})"
-                else:
-                    meta_line += f" · 💸 ${float(cost_val):.4f} (Gemini: ${g_cost:.4f} · DeepSeek: no charge recorded)"
+                meta_line += f" · 💸 ${float(cost_val):.4f} (Gemini: ${g_cost:.4f} · DeepSeek: {deepseek_cost_label(d_cost, audit_status)})"
             except Exception:
                 meta_line += f" · 💸 ${float(cost_val):.4f}"
 
@@ -2831,6 +2844,9 @@ def render_exam_queue_dashboard():
             with c_top1:
                 st.markdown(f"**#{idx + 1}. {title}**")
                 st.caption(meta_line)
+                audit_data = res_data.get("deepseek_audit") or {}
+                if audit_data.get("status") == "ERROR":
+                    st.warning(audit_data.get("summary") or "DeepSeek checking failed; this exam was not audited.")
             with c_top2:
                 if status == "RUNNING":
                     st.markdown('<span style="background-color:#E3F2FD; color:#1565C0; padding:4px 10px; border-radius:12px; font-weight:bold; font-size:13px;">🔄 Generating</span>', unsafe_allow_html=True)
@@ -3869,15 +3885,16 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
             if xh_m: num_xh = int(xh_m.group(1))
 
         # Re-save to cloud with solutions
+        existing_audit_meta = _get_audit_meta_from_storage(exam.get("pdf_url", ""))
         success, save_result = save_to_supabase(
             clean_topic, subject, year, diff, set_num,
             pdf_bytes, word_bytes,
             num_mc=num_mc, num_easy=num_easy, num_med=num_med,
             num_hard=num_hard, num_xh=num_xh,
             existing_id=exam.get("id"),
-            cost=exam.get("cost"),
-            gemini_cost=exam.get("gemini_cost"),
-            ds_cost=exam.get("ds_cost"),
+            cost=exam.get("cost") if exam.get("cost") is not None else existing_audit_meta.get("total_cost"),
+            gemini_cost=exam.get("gemini_cost") if exam.get("gemini_cost") is not None else existing_audit_meta.get("gemini_cost"),
+            ds_cost=exam.get("ds_cost") if exam.get("ds_cost") is not None else existing_audit_meta.get("ds_cost"),
             model=exam.get("model"),
             extra_instructions=exam.get("extra_instructions") or exam.get("instructions") or "",
             created_by=exam.get("created_by", ""),
@@ -3885,6 +3902,10 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
             questions_text=q_text,
             answers_text=a_text,
             solutions_text=s_sanitized,
+            audit_data={
+                "status": existing_audit_meta.get("audit_status"),
+                "summary": existing_audit_meta.get("audit_summary", ""),
+            } if existing_audit_meta else None,
         )
 
         if success:
@@ -4026,7 +4047,7 @@ if app_mode == "📚 Exam Library":
                         cost_badge = f"${total_cost:.4f} (Gemini: ${gemini_cost:.4f} · DeepSeek: ${ds_cost:.4f})"
                         engine_val = f"{model_val} + deepseek-r1"
                     elif ds_cost == 0 and gemini_cost is not None:
-                        cost_badge = f"${total_cost:.4f} (Gemini: ${gemini_cost:.4f} · DeepSeek: no charge recorded)"
+                        cost_badge = f"${total_cost:.4f} (Gemini: ${gemini_cost:.4f} · DeepSeek: status unknown; check audit record)"
                         engine_val = model_val
                     elif gemini_cost is not None:
                         cost_badge = f"${total_cost:.4f} (Gemini: ${gemini_cost:.4f} · DeepSeek: cost unavailable)"
@@ -4051,10 +4072,10 @@ if app_mode == "📚 Exam Library":
                                 audit_summary = audit_meta.get("audit_summary") or ""
                                 if audit_status == "ERROR":
                                     st.warning(f"DeepSeek check failed: {audit_summary or 'No reason was saved.'}")
-                                elif audit_status == "NOT_RUN":
+                                elif audit_status in ("NOT_RUN", "SKIPPED"):
                                     st.info("DeepSeek checking was not used for this exam.")
-                                elif audit_status in ("APPROVED", "REVISION_NEEDED") and audit_summary:
-                                    st.info(f"DeepSeek responded ({audit_status}), but no usage cost was recorded. {audit_summary}")
+                                elif audit_status in ("APPROVED", "REVISION_NEEDED"):
+                                    st.info(f"DeepSeek responded ({audit_status}), but its usage price is unavailable. {audit_summary}")
                                 else:
                                     st.info("This exam has no reliable saved DeepSeek audit status or price.")
 
@@ -4659,17 +4680,15 @@ if st.session_state.questions_text:
     out_cost = (out_tok / 1_000_000) * 3.75
     search_cost = 0.014 if st.session_state.used_search else 0.00
     gemini_cost = round(in_cost + out_cost + search_cost, 5)
-    ds_cost = float(st.session_state.get("meta_ds_cost") or 0.0)
-    total_cost = round(gemini_cost + ds_cost, 5)
+    ds_cost = st.session_state.get("meta_ds_cost")
+    total_cost = round(gemini_cost + (ds_cost or 0.0), 5)
     st.session_state["meta_gemini_cost"] = gemini_cost
     st.session_state["meta_total_cost"] = total_cost
 
     if st.session_state.get("admin_pin") == "DA_ADMIN":
         search_badge = " &nbsp;&nbsp;|&nbsp;&nbsp; 🌍 *Live Web Search*" if st.session_state.used_search else ""
-        if ds_cost > 0:
-            split_info = f" (🤖 Gemini: ${gemini_cost:.4f} &nbsp;|&nbsp; 🛡️ DeepSeek Auditor: ${ds_cost:.4f})"
-        else:
-            split_info = f" (🤖 Gemini: ${gemini_cost:.4f} &nbsp;|&nbsp; 🛡️ DeepSeek Auditor: no charge recorded)"
+        audit_status = (st.session_state.get("deepseek_audit") or {}).get("status")
+        split_info = f" (🤖 Gemini: ${gemini_cost:.4f} &nbsp;|&nbsp; 🛡️ DeepSeek Auditor: {deepseek_cost_label(ds_cost, audit_status)})"
         st.caption(f"**💸 Generation Cost:** ${total_cost:.5f}{split_info} &nbsp;&nbsp;|&nbsp;&nbsp; **Engine:** `{model_used}` &nbsp;&nbsp;|&nbsp;&nbsp; **Tokens:** {in_tok:,} In / {out_tok:,} Out{search_badge}")
         st.caption("ℹ️ Reflects official Gemini 3.8 Flash rates ($0.75/1M in, $3.75/1M out) + DeepSeek-R1 auditor rates ($0.55/1M in, $2.19/1M out).")
 
