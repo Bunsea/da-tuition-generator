@@ -2724,7 +2724,127 @@ def _save_queue_job_to_cloud(job: dict) -> tuple[bool, str]:
     )
     if s_ok:
         job["saved_to_cloud"] = True
+        res["cloud_saved"] = True
+        res["saved_exam_id"] = s_msg
     return s_ok, s_msg
+
+
+def _set_number_conflict(job: dict, new_set: int) -> bool:
+    """Keep a topic/course's set number unique across the queue and library."""
+    res = job.get("result") or {}
+    topic = res.get("meta_topic") or job.get("topic", "")
+    subject = res.get("meta_subject") or job.get("subject", "")
+    year = res.get("meta_year") or job.get("year", "")
+    level = res.get("meta_diff") or job.get("level", "")
+    with GLOBAL_QUEUE_LOCK:
+        if any(
+            other is not job and other.get("status") == "COMPLETED"
+            and (other.get("result") or {}).get("meta_topic") == topic
+            and other.get("subject") == subject and other.get("year") == year
+            and other.get("level") == level and int(other.get("meta_set") or 0) == new_set
+            for other in GLOBAL_JOB_QUEUE.values()
+        ):
+            return True
+    if supabase_client:
+        rows = (
+            supabase_client.table("saved_exams").select("id,topic")
+            .eq("subject", subject).eq("year_group", year).eq("difficulty", level)
+            .ilike("topic", f"{topic}%Set {new_set}%").execute()
+        ).data or []
+        return any(
+            str(row.get("id")) != str(res.get("saved_exam_id"))
+            and row.get("topic", "").startswith(f"{topic} (")
+            and re.search(rf"\bSet\s*{new_set}\b", row.get("topic", ""), re.IGNORECASE)
+            for row in rows
+        )
+    return False
+
+
+def _change_queue_job_set_number(job: dict, new_set: int) -> tuple[bool, str]:
+    """Rebuild a completed exam, then update its queue and cloud copies."""
+    res = job.get("result") or {}
+    if job.get("status") != "COMPLETED" or not res.get("questions_text"):
+        return False, "This exam is not ready to edit."
+    old_set = int(res.get("meta_set") or job.get("meta_set") or 1)
+    if new_set == old_set:
+        return True, f"This exam is already Set {new_set}."
+    if new_set < 1 or new_set > 999:
+        return False, "Choose a set number from 1 to 999."
+    try:
+        if _set_number_conflict(job, new_set):
+            return False, f"Set {new_set} is already used for this topic and course."
+    except Exception as exc:
+        _log_error("check_set_number_conflict", exc)
+        return False, "Could not check whether that set number is already used. Please try again."
+
+    topic = res.get("meta_topic") or job.get("topic", "Exam")
+    display_topic = f"{topic} Set {new_set}"
+    year = res.get("meta_year") or job.get("year", "")
+    subject = res.get("meta_subject") or job.get("subject", "")
+    level = res.get("meta_diff") or job.get("level", "")
+    title = f"{year} {subject}{' ' + level if level else ''}".strip()
+    work_dir = tempfile.mkdtemp(prefix="da_set_edit_")
+    try:
+        pdf_bytes, tex_bytes, word_bytes, log, word_reason = _render_exam_files(
+            work_dir, display_topic, title, res["questions_text"],
+            res.get("answers_text", ""), res.get("solutions_text", ""),
+            res.get("meta_n") or job.get("total_q") or 10,
+        )
+    except Exception as exc:
+        _log_error("rebuild_queue_set_number", exc)
+        return False, f"Could not rebuild the exam for Set {new_set}: {exc}"
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+    if not pdf_bytes:
+        return False, f"Could not rebuild the PDF for Set {new_set}: {log}"
+
+    if job.get("saved_to_cloud"):
+        saved_id = res.get("saved_exam_id")
+        if not saved_id:
+            return False, "The saved exam ID is missing. Open the exam in the library to change its set number."
+        try:
+            saved_rows = supabase_client.table("saved_exams").select("*").eq("id", saved_id).execute().data or []
+            if not saved_rows:
+                return False, "The saved exam could not be found in the library."
+            saved_exam = saved_rows[0]
+            saved_set_match = re.search(r"\bSet\s*(\d+)\b", saved_exam.get("topic", ""), re.IGNORECASE)
+            if saved_set_match and int(saved_set_match.group(1)) != old_set:
+                return False, "This exam was changed in the library. Refresh and edit the current library copy."
+            if _exam_has_solutions(saved_exam) and not res.get("solutions_text"):
+                return False, "The library copy has newer worked solutions. Change its set number in the library to keep them."
+        except Exception as exc:
+            _log_error("check_saved_exam_before_set_edit", exc)
+            return False, "Could not check the saved exam before updating it. Please try again."
+        creator = res.get("created_by") or job.get("created_by", "Teacher")
+        computer = job.get("computer_name") or ""
+        if computer and computer not in creator:
+            creator = f"{creator} ({computer})"
+        ok, save_result = save_to_supabase(
+            topic, subject, year, level, new_set, pdf_bytes, word_bytes,
+            num_mc=res.get("meta_mc", 0), num_easy=res.get("meta_easy", 0),
+            num_med=res.get("meta_med", 0), num_hard=res.get("meta_hard", 0),
+            num_xh=res.get("meta_xh", 0), existing_id=saved_id,
+            cost=res.get("meta_total_cost"), gemini_cost=res.get("meta_gemini_cost"),
+            ds_cost=res.get("meta_ds_cost"), model=res.get("meta_model_used"),
+            extra_instructions=res.get("meta_extra_instructions", ""),
+            created_by=creator,
+            has_solutions=bool(res.get("solutions_text")),
+            questions_text=res["questions_text"], answers_text=res.get("answers_text", ""),
+            solutions_text=res.get("solutions_text", ""), audit_data=res.get("deepseek_audit"),
+        )
+        if not ok:
+            return False, f"Could not update the cloud library: {save_result}"
+
+    res.update({
+        "meta_set": new_set, "display_topic": display_topic,
+        "pdf_bytes": pdf_bytes, "tex_bytes": tex_bytes, "word_bytes": word_bytes,
+        "compiler_log": log, "word_skip_reason": word_reason,
+    })
+    job["meta_set"] = new_set
+    job["title"] = display_topic
+    if st.session_state.get("loaded_queue_job_id") == job.get("id"):
+        _load_job_into_session_state(res)
+    return True, f"Changed this exam to Set {new_set}."
 
 
 def render_exam_queue_dashboard():
@@ -2868,6 +2988,7 @@ def render_exam_queue_dashboard():
                 with b1:
                     if st.button("👁️ Load to Preview", key=f"q_view_{jid}", type="primary", use_container_width=True):
                         _load_job_into_session_state(res)
+                        st.session_state["loaded_queue_job_id"] = jid
                         st.toast(f"✅ Loaded {title} into Preview below!")
                         st.rerun()
                 with b2:
@@ -2905,6 +3026,23 @@ def render_exam_queue_dashboard():
                                 st.error(f"Failed to save: {s_msg}")
                     else:
                         st.caption("☁️ Saved to Cloud Library")
+
+                edit_col, save_col = st.columns([1, 2], vertical_alignment="bottom")
+                with edit_col:
+                    requested_set = st.number_input(
+                        "Change Set #", min_value=1, max_value=999,
+                        value=int(res.get("meta_set") or job.get("meta_set") or 1),
+                        key=f"q_set_edit_{jid}",
+                    )
+                with save_col:
+                    if st.button("💾 Update Set #", key=f"q_set_save_{jid}"):
+                        with st.spinner("Updating exam and saved files..."):
+                            ok, message = _change_queue_job_set_number(job, int(requested_set))
+                        if ok:
+                            st.toast(message)
+                            st.rerun()
+                        else:
+                            st.error(message)
 
 
 def render_exam_queue_section():
@@ -3752,6 +3890,134 @@ def _get_exam_content_from_storage(pdf_url: str) -> tuple[str, str]:
     return q_text, a_text
 
 
+def _get_exam_solutions_from_storage(pdf_url: str) -> str:
+    """Fetch saved worked solutions so a set edit can rebuild every page."""
+    if not pdf_url or not supabase_client:
+        return ""
+    try:
+        path = unquote(pdf_url.split("/exam-files/")[-1].split("?")[0])
+        if path.endswith(".pdf"):
+            stem = path[:-4]
+            stems = [stem, re.sub(r"[\s_\-]w[\s_\-]sol$", "", stem, flags=re.IGNORECASE).strip()]
+            for candidate in dict.fromkeys(stems):
+                try:
+                    content = supabase_client.storage.from_("exam-files").download(candidate + "_solutions.txt")
+                    if content:
+                        return content.decode("utf-8").strip()
+                except Exception:
+                    pass
+    except Exception as exc:
+        _log_error("get_exam_solutions_from_storage", exc)
+    return ""
+
+
+def _change_library_exam_set_number(exam: dict, new_set: int) -> tuple[bool, str]:
+    """Rebuild and save a library exam with a new set number."""
+    topic_str = exam.get("topic", "")
+    match = re.search(r"\bSet\s*(\d+)\b", topic_str, re.IGNORECASE)
+    old_set = int(match.group(1)) if match else 1
+    if new_set == old_set:
+        return True, f"This exam is already Set {new_set}."
+    clean_topic = re.sub(r"\s*\(Yr[^)]*\)\s*Set\s*\d+.*$", "", topic_str, flags=re.IGNORECASE).strip()
+    if clean_topic == topic_str and match:
+        clean_topic = topic_str[:match.start()].strip()
+    if not clean_topic:
+        return False, "Could not identify this exam's topic."
+    subject = exam.get("subject", "")
+    year = exam.get("year_group", "")
+    level = exam.get("difficulty", "")
+    with GLOBAL_QUEUE_LOCK:
+        if any(
+            queued.get("status") == "COMPLETED"
+            and str((queued.get("result") or {}).get("saved_exam_id")) != str(exam.get("id"))
+            and (queued.get("result") or {}).get("meta_topic") == clean_topic
+            and queued.get("subject") == subject and queued.get("year") == year
+            and queued.get("level") == level and int(queued.get("meta_set") or 0) == new_set
+            for queued in GLOBAL_JOB_QUEUE.values()
+        ):
+            return False, f"Set {new_set} is already used for this topic and course."
+    try:
+        rows = (
+            supabase_client.table("saved_exams").select("id,topic")
+            .eq("subject", subject).eq("year_group", year).eq("difficulty", level)
+            .ilike("topic", f"{clean_topic}%Set {new_set}%").execute()
+        ).data or []
+        if any(
+            str(row.get("id")) != str(exam.get("id"))
+            and row.get("topic", "").startswith(f"{clean_topic} (")
+            and re.search(rf"\bSet\s*{new_set}\b", row.get("topic", ""), re.IGNORECASE)
+            for row in rows
+        ):
+            return False, f"Set {new_set} is already used for this topic and course."
+    except Exception as exc:
+        _log_error("check_library_set_number_conflict", exc)
+        return False, "Could not check whether that set number is already used. Please try again."
+
+    q_text, a_text = _get_exam_content_from_storage(exam.get("pdf_url", ""))
+    if not q_text:
+        return False, "This older exam has no saved question source, so its PDF cannot be rebuilt with a new set number."
+    has_solutions = _exam_has_solutions(exam)
+    s_text = _get_exam_solutions_from_storage(exam.get("pdf_url", "")) if has_solutions else ""
+    if has_solutions and not s_text:
+        return False, "The worked solution source is unavailable, so this exam cannot be rebuilt safely."
+
+    display_topic = f"{clean_topic} Set {new_set}"
+    title = f"{year} {subject}{' ' + level if level else ''}".strip()
+    total_q = len(re.findall(r"\\item\b", q_text)) or 10
+    work_dir = tempfile.mkdtemp(prefix="da_lib_set_edit_")
+    try:
+        pdf_bytes, tex_bytes, word_bytes, log, word_reason = _render_exam_files(
+            work_dir, display_topic, title, q_text, a_text, s_text, total_q
+        )
+    except Exception as exc:
+        _log_error("rebuild_library_set_number", exc)
+        return False, f"Could not rebuild the exam: {exc}"
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+    if not pdf_bytes:
+        return False, f"Could not rebuild the PDF: {log}"
+
+    def count(label):
+        found = re.search(rf"(\d+)\s*{label}\b", topic_str, re.IGNORECASE)
+        return int(found.group(1)) if found else 0
+
+    audit_meta = _get_audit_meta_from_storage(exam.get("pdf_url", ""))
+    ok, result = save_to_supabase(
+        clean_topic, subject, year, level, new_set, pdf_bytes, word_bytes,
+        num_mc=count("MC"), num_easy=count("Easy"), num_med=count("Med(?:ium)?"),
+        num_hard=count("Hard"), num_xh=count("Ext"), existing_id=exam.get("id"),
+        cost=exam.get("cost") if exam.get("cost") is not None else audit_meta.get("total_cost"),
+        gemini_cost=exam.get("gemini_cost") if exam.get("gemini_cost") is not None else audit_meta.get("gemini_cost"),
+        ds_cost=exam.get("ds_cost") if exam.get("ds_cost") is not None else audit_meta.get("ds_cost"),
+        model=exam.get("model"),
+        extra_instructions=get_exam_instructions(exam.get("pdf_url", ""), exam.get("extra_instructions") or exam.get("instructions") or ""),
+        created_by=exam.get("created_by", ""), has_solutions=has_solutions,
+        questions_text=q_text, answers_text=a_text, solutions_text=s_text,
+        audit_data={"status": audit_meta.get("audit_status"), "summary": audit_meta.get("audit_summary", "")} if audit_meta else None,
+    )
+    if not ok:
+        return False, f"Could not update the cloud library: {result}"
+    with GLOBAL_QUEUE_LOCK:
+        for queued_job in GLOBAL_JOB_QUEUE.values():
+            queued_result = queued_job.get("result") or {}
+            if str(queued_result.get("saved_exam_id")) == str(exam.get("id")):
+                queued_result.update({
+                    "meta_set": new_set, "display_topic": display_topic,
+                    "pdf_bytes": pdf_bytes, "tex_bytes": tex_bytes,
+                    "word_bytes": word_bytes, "compiler_log": log,
+                    "word_skip_reason": word_reason,
+                })
+                queued_job["meta_set"] = new_set
+                queued_job["title"] = display_topic
+    if str(st.session_state.get("saved_exam_id")) == str(exam.get("id")):
+        st.session_state.update({
+            "meta_set": new_set, "display_topic": display_topic,
+            "pdf_bytes": pdf_bytes, "tex_bytes": tex_bytes, "word_bytes": word_bytes,
+            "compiler_log": log, "word_skip_reason": word_reason,
+        })
+    return True, f"Changed this exam to Set {new_set}."
+
+
 def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
     """Generate fully worked solutions for an existing library exam, rebuild its PDF
     with solutions appended, and re-upload to cloud.  Returns (success, message)."""
@@ -4145,25 +4411,17 @@ if app_mode == "📚 Exam Library":
                                 max_value=999,
                                 value=cur_set,
                                 key=f"edit_set_{exam['id']}",
-                                help="Change the set number for this saved exam in the library",
+                                help="Rebuild the PDF and Word file with this set number, then update the library record.",
                             )
                         with set_col2:
                             if st.button("💾 Update Set #", key=f"btn_save_set_{exam['id']}"):
-                                if new_set_val != cur_set:
-                                    old_topic = exam.get("topic", "")
-                                    if m_set:
-                                        updated_topic = re.sub(r"\bSet\s*\d+\b", f"Set {new_set_val}", old_topic, count=1, flags=re.IGNORECASE)
-                                    else:
-                                        updated_topic = f"{old_topic} Set {new_set_val}"
-                                    try:
-                                        supabase_client.table("saved_exams").update({"topic": updated_topic}).eq("id", exam["id"]).execute()
-                                        st.toast(f"✅ Set number updated to Set {new_set_val}!")
-                                        time.sleep(0.5)
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f"Failed to update set number: {e}")
+                                with st.spinner("Rebuilding exam and updating saved files..."):
+                                    ok, message = _change_library_exam_set_number(exam, int(new_set_val))
+                                if ok:
+                                    st.toast(message)
+                                    st.rerun()
                                 else:
-                                    st.info(f"Exam is already Set {cur_set}.")
+                                    st.error(message)
 
                         # --- EXTRA INSTRUCTIONS SECTION ---
                         instr_text = get_exam_instructions(
