@@ -1913,9 +1913,15 @@ def get_next_set_number_with_queue(subject: str, year: str, diff: str, topic: st
     return next_s
 
 
-def generate_exam_worker(params: dict, progress_cb=None) -> dict:
+def generate_exam_worker(params: dict, progress_cb=None, cancel_event=None) -> dict:
     """Executes full exam generation and compilation in an isolated, thread-safe environment.
     Can be run in foreground (with UI toasts/spinners) or in background worker threads."""
+    def _stopped():
+        return bool(cancel_event and cancel_event.is_set())
+
+    def _cancelled_result():
+        return {"success": False, "cancelled": True}
+
     def _notify(msg: str):
         if progress_cb:
             try:
@@ -1924,6 +1930,8 @@ def generate_exam_worker(params: dict, progress_cb=None) -> dict:
                 pass
 
     try:
+        if _stopped():
+            return _cancelled_result()
         api_key = (params.get("api_key") or "").strip()
         if not api_key:
             return {"success": False, "error": "Missing Gemini API key."}
@@ -2310,6 +2318,8 @@ When instructed, your final combined output must follow this template structure 
                 tool_candidates = [[], active_tools] if (total_q >= 30 or not active_tools) else [active_tools, []]
 
                 for t_list in tool_candidates:
+                    if _stopped():
+                        return _cancelled_result()
                     try:
                         cfg = types.GenerateContentConfig(
                             max_output_tokens=cur_max_tok,
@@ -2326,6 +2336,8 @@ When instructed, your final combined output must follow this template structure 
                             "\n\nPHASE 1 INSTRUCTION: You must generate the exam questions AND the answer key. First, generate the questions between ===LATEX_CONTENT_START=== and ===LATEX_CONTENT_END===. Then, immediately generate the short answers between ===LATEX_ANSWERS_START=== and ===LATEX_ANSWERS_END===. Do NOT generate fully worked solutions."
                         ]
                         res1 = client.models.generate_content(model=model_name, contents=p1_payload, config=cfg)
+                        if _stopped():
+                            return _cancelled_result()
                         raw_text = _extract_genai_text(res1)
                         if not raw_text or "LATEX_CONTENT_START" not in raw_text:
                             raise ValueError(f"{model_name} returned incomplete text. Forcing retry...")
@@ -2347,19 +2359,30 @@ When instructed, your final combined output must follow this template structure 
                             out_tok += getattr(res1.usage_metadata, "candidates_token_count", 0)
                         break
                     except Exception as e:
+                        if _stopped():
+                            return _cancelled_result()
                         last_error = e
                         if t_list:
                             continue
                         else:
                             if _is_retryable(e):
-                                time.sleep(1.5)
+                                if cancel_event:
+                                    cancel_event.wait(1.5)
+                                else:
+                                    time.sleep(1.5)
                             break
                 if out:
                     break
             if out:
                 break
             if attempt < max_retries - 1:
-                time.sleep((attempt + 1) * 3)
+                if cancel_event:
+                    cancel_event.wait((attempt + 1) * 3)
+                else:
+                    time.sleep((attempt + 1) * 3)
+
+        if _stopped():
+            return _cancelled_result()
 
         if not out:
             raise (last_error or Exception("Failed to generate content after multiple attempts."))
@@ -2367,6 +2390,8 @@ When instructed, your final combined output must follow this template structure 
         # DeepSeek-R1 Quality Audit
         audit_res = None
         if use_deepseek_auditor:
+            if _stopped():
+                return _cancelled_result()
             active_ds_key = (deepseek_api_key or _get_deepseek_api_key()).strip()
             if active_ds_key:
                 _notify("🛡️ DeepSeek-R1: Auditing math solvability & syllabus compliance...")
@@ -2380,6 +2405,8 @@ When instructed, your final combined output must follow this template structure 
                     syllabus_rules=syllabus_ban,
                     api_key=active_ds_key,
                 )
+                if _stopped():
+                    return _cancelled_result()
                 if audit_res.get("status") == "REVISION_NEEDED" and audit_res.get("correction_prompt"):
                     _notify("⚡ Gemini: Auto-correcting questions based on DeepSeek audit...")
                     refine_prompt = (
@@ -2397,6 +2424,8 @@ When instructed, your final combined output must follow this template structure 
                     )
                     refine_models = ["gemini-3.8-flash", "gemini-3.6-flash"]
                     for r_model in refine_models:
+                        if _stopped():
+                            return _cancelled_result()
                         cur_ref_tok = MAX_OUTPUT_TOKENS
                         try:
                             ref_cfg = types.GenerateContentConfig(
@@ -2413,6 +2442,8 @@ When instructed, your final combined output must follow this template structure 
                                 contents=ai_payload + [refine_prompt],
                                 config=ref_cfg,
                             )
+                            if _stopped():
+                                return _cancelled_result()
                             raw_ref = _extract_genai_text(res_refined)
                             if raw_ref and "LATEX_CONTENT_START" in raw_ref:
                                 if "LATEX_CONTENT_END" not in raw_ref:
@@ -2429,6 +2460,8 @@ When instructed, your final combined output must follow this template structure 
                                     out_tok += getattr(res_refined.usage_metadata, "candidates_token_count", 0)
                                 break
                         except Exception:
+                            if _stopped():
+                                return _cancelled_result()
                             continue
 
             else:
@@ -2455,6 +2488,8 @@ When instructed, your final combined output must follow this template structure 
         # Phase 2: Solutions (if auto_solutions requested)
         s_sanitized = ""
         if auto_solutions:
+            if _stopped():
+                return _cancelled_result()
             _notify("🧠 Calculating deep step-by-step mathematical solutions...")
             p2_payload = ai_payload + [
                 out,
@@ -2467,6 +2502,8 @@ When instructed, your final combined output must follow this template structure 
                 cur_max_tok = MAX_OUTPUT_TOKENS
                 tool_candidates = [[], active_tools] if (total_q >= 30 or not active_tools) else [active_tools, []]
                 for t_list in tool_candidates:
+                    if _stopped():
+                        return _cancelled_result()
                     try:
                         cfg = types.GenerateContentConfig(
                             max_output_tokens=cur_max_tok,
@@ -2479,6 +2516,8 @@ When instructed, your final combined output must follow this template structure 
                             ],
                         )
                         res2 = client.models.generate_content(model=s_model, contents=p2_payload, config=cfg)
+                        if _stopped():
+                            return _cancelled_result()
                         raw_s = _extract_genai_text(res2)
                         if not raw_s or "LATEX_SOLUTIONS_START" not in raw_s:
                             raise ValueError("Solutions truncated. Retrying...")
@@ -2490,6 +2529,8 @@ When instructed, your final combined output must follow this template structure 
                             out_tok += getattr(res2.usage_metadata, "candidates_token_count", 0)
                         break
                     except Exception:
+                        if _stopped():
+                            return _cancelled_result()
                         if t_list:
                             continue
                         break
@@ -2500,6 +2541,8 @@ When instructed, your final combined output must follow this template structure 
                 s_m = re.search(r"===?\s*LATEX_SOLUTIONS_START\s*===?(.*?)(?:===?\s*LATEX_SOLUTIONS_END\s*===?|$)", s_out, re.DOTALL | re.IGNORECASE)
                 s_sanitized = sanitize_ai_latex(s_m.group(1).strip() if s_m else "")
 
+        if _stopped():
+            return _cancelled_result()
         _notify("⚙️ Compiling PDF & Word documents...")
         title = f"{grades_string} {subject}{level_text}".strip()
         work_dir = tempfile.mkdtemp(prefix="da_exam_worker_")
@@ -2507,6 +2550,8 @@ When instructed, your final combined output must follow this template structure 
             work_dir, display_topic, title, q_sanitized, a_sanitized, s_sanitized, total_q
         )
         shutil.rmtree(work_dir, ignore_errors=True)
+        if _stopped():
+            return _cancelled_result()
 
         # Pricing: Gemini 3.8 Flash ($0.75 / 1M in, $3.75 / 1M out) + Google Search ($0.014) + DeepSeek-R1 Auditor ($0.55 in, $2.19 out)
         in_cost = (in_tok / 1_000_000) * 0.75
@@ -2572,6 +2617,7 @@ When instructed, your final combined output must follow this template structure 
 def submit_exam_job(params: dict, teacher_username: str = "") -> str:
     """Submits an exam generation job to the background worker pool."""
     job_id = str(uuid.uuid4())[:8]
+    cancel_event = threading.Event()
     comp_name = params.get("computer_name") or get_effective_computer_name()
     with GLOBAL_QUEUE_LOCK:
         GLOBAL_JOB_QUEUE[job_id] = {
@@ -2589,8 +2635,10 @@ def submit_exam_job(params: dict, teacher_username: str = "") -> str:
             "created_by": params.get("created_by", "Teacher"),
             "computer_name": comp_name,
             "username": teacher_username,
-            "status": "QUEUED",  # QUEUED, RUNNING, COMPLETED, FAILED
+            "status": "QUEUED",  # QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED
             "progress": "Waiting in queue...",
+            "cancel_event": cancel_event,
+            "future": None,
             "result": None,
             "error": None,
             "saved_to_cloud": False,
@@ -2598,19 +2646,21 @@ def submit_exam_job(params: dict, teacher_username: str = "") -> str:
 
     def _worker():
         with GLOBAL_QUEUE_LOCK:
-            if job_id in GLOBAL_JOB_QUEUE:
-                GLOBAL_JOB_QUEUE[job_id]["status"] = "RUNNING"
-                GLOBAL_JOB_QUEUE[job_id]["progress"] = "Starting AI engine..."
+            job = GLOBAL_JOB_QUEUE.get(job_id)
+            if not job or cancel_event.is_set() or job["status"] == "CANCELLED":
+                return
+            job["status"] = "RUNNING"
+            job["progress"] = "Starting AI engine..."
 
         def cb(msg):
             with GLOBAL_QUEUE_LOCK:
-                if job_id in GLOBAL_JOB_QUEUE:
+                if job_id in GLOBAL_JOB_QUEUE and not cancel_event.is_set():
                     GLOBAL_JOB_QUEUE[job_id]["progress"] = msg
 
         try:
-            res = generate_exam_worker(params, progress_cb=cb)
+            res = generate_exam_worker(params, progress_cb=cb, cancel_event=cancel_event)
             with GLOBAL_QUEUE_LOCK:
-                if job_id in GLOBAL_JOB_QUEUE:
+                if job_id in GLOBAL_JOB_QUEUE and not cancel_event.is_set():
                     if res.get("success"):
                         GLOBAL_JOB_QUEUE[job_id]["status"] = "COMPLETED"
                         GLOBAL_JOB_QUEUE[job_id]["progress"] = "Ready!"
@@ -2623,13 +2673,35 @@ def submit_exam_job(params: dict, teacher_username: str = "") -> str:
         except Exception as e:
             _log_error(f"background_job_{job_id}", e)
             with GLOBAL_QUEUE_LOCK:
-                if job_id in GLOBAL_JOB_QUEUE:
+                if job_id in GLOBAL_JOB_QUEUE and not cancel_event.is_set():
                     GLOBAL_JOB_QUEUE[job_id]["status"] = "FAILED"
                     GLOBAL_JOB_QUEUE[job_id]["error"] = friendly_error_message(e)
                     GLOBAL_JOB_QUEUE[job_id]["progress"] = "Failed"
 
-    GLOBAL_JOB_EXECUTOR.submit(_worker)
+    future = GLOBAL_JOB_EXECUTOR.submit(_worker)
+    with GLOBAL_QUEUE_LOCK:
+        job = GLOBAL_JOB_QUEUE.get(job_id)
+        if job:
+            job["future"] = future
+        if cancel_event.is_set():
+            future.cancel()
     return job_id
+
+
+def stop_exam_job(job_id: str) -> bool:
+    """Stop a queued job or ask a running job to exit at its next checkpoint."""
+    with GLOBAL_QUEUE_LOCK:
+        job = GLOBAL_JOB_QUEUE.get(job_id)
+        if not job or job.get("status") not in ("QUEUED", "RUNNING"):
+            return False
+        job["cancel_event"].set()
+        job["status"] = "CANCELLED"
+        job["progress"] = "Stopped by teacher."
+        job["result"] = None
+        future = job.get("future")
+    if future:
+        future.cancel()
+    return True
 
 
 def _load_job_into_session_state(res: dict):
@@ -2851,7 +2923,7 @@ def render_exam_queue_dashboard():
     """Renders active, queued, and completed background generation jobs."""
     with GLOBAL_QUEUE_LOCK:
         active_jobs = [j for j in GLOBAL_JOB_QUEUE.values() if j.get("status") in ("QUEUED", "RUNNING")]
-        done_jobs = [j for j in GLOBAL_JOB_QUEUE.values() if j.get("status") in ("COMPLETED", "FAILED")]
+        done_jobs = [j for j in GLOBAL_JOB_QUEUE.values() if j.get("status") in ("COMPLETED", "FAILED", "CANCELLED")]
 
     active_jobs.sort(key=lambda x: _safe_dt_timestamp(x.get("created_at")))
     done_jobs.sort(key=lambda x: _safe_dt_timestamp(x.get("created_at")), reverse=True)
@@ -2911,7 +2983,7 @@ def render_exam_queue_dashboard():
         if st.button("🔄 Refresh Status", key="btn_refresh_q", help="Refresh progress of background jobs"):
             st.rerun()
     with q_head_c4:
-        if st.button("🗑️ Clear Done", key="btn_clear_done_q", help="Clear completed or failed jobs from this list"):
+        if st.button("🗑️ Clear Done", key="btn_clear_done_q", help="Clear completed, failed, or stopped jobs from this list"):
             with GLOBAL_QUEUE_LOCK:
                 for j in done_jobs:
                     if j["id"] in GLOBAL_JOB_QUEUE:
@@ -2976,10 +3048,18 @@ def render_exam_queue_dashboard():
                     st.markdown('<span style="background-color:#E8F5E9; color:#2E7D32; padding:4px 10px; border-radius:12px; font-weight:bold; font-size:13px;">✅ Completed</span>', unsafe_allow_html=True)
                 elif status == "FAILED":
                     st.markdown('<span style="background-color:#FFEBEE; color:#C62828; padding:4px 10px; border-radius:12px; font-weight:bold; font-size:13px;">❌ Failed</span>', unsafe_allow_html=True)
+                elif status == "CANCELLED":
+                    st.markdown('<span style="background-color:#F1F3F4; color:#5F6368; padding:4px 10px; border-radius:12px; font-weight:bold; font-size:13px;">⏹️ Stopped</span>', unsafe_allow_html=True)
 
             if status in ("RUNNING", "QUEUED"):
                 st.progress(0.65 if status == "RUNNING" else 0.15)
                 st.caption(f"ℹ️ {progress}")
+                if st.button("⏹️ Stop", key=f"q_stop_{jid}", help="Stop this exam generation", type="secondary"):
+                    if stop_exam_job(jid):
+                        st.toast(f"Stopped {title}.")
+                    st.rerun()
+            elif status == "CANCELLED":
+                st.caption(progress)
             elif status == "FAILED":
                 st.error(f"Error: {job.get('error', 'Unknown error')}")
             elif status == "COMPLETED":
