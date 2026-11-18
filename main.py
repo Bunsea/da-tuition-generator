@@ -389,7 +389,7 @@ def clean_redundant_topic_prefix(topic_str: str, year: str = "", subject: str = 
 
 
 def build_exam_filename(topic: str, year: str, subject: str, diff: str, set_num: int, has_solutions: bool = False, num_mc: int = 0, num_easy: int = 0, num_med: int = 0, num_hard: int = 0, num_xh: int = 0, ext: str = "") -> str:
-    """Builds a standardized, non-redundant exam filename matching DA Tuition format."""
+    """Build a recognizable exam filename that fits browser and filesystem limits."""
     clean_t = clean_redundant_topic_prefix(topic, year, subject, diff)
     clean_t = re.sub(r"\s*Set\s*\d+.*", "", clean_t, flags=re.IGNORECASE).strip()
     safe_topic = clean_t.replace("/", "-").replace("\\", "-")
@@ -424,8 +424,19 @@ def build_exam_filename(topic: str, year: str, subject: str, diff: str, set_num:
     suffix = f"{yr_short} {subject}{lvl_text}".strip()
     suffix_part = f" - {suffix}" if suffix else ""
 
-    base = f"{safe_topic} Set {set_num}{sol_tag}{dist_str}{suffix_part}"
+    tail = f" Set {set_num}{sol_tag}{dist_str}{suffix_part}"
+    base = f"{safe_topic}{tail}"
     base = re.sub(r"\s+", " ", base).strip()
+    # Long multi-topic titles can exceed Safari/iPadOS and filesystem filename limits.
+    # Reserve room for cloud archive suffixes such as "_instructions.txt" too.
+    max_base_bytes = 180
+    if len(base.encode("utf-8")) > max_base_bytes:
+        digest = hashlib.sha256(base.encode("utf-8")).hexdigest()[:8]
+        marker = f"-{digest}"
+        topic_budget = max_base_bytes - len((marker + tail).encode("utf-8"))
+        clipped_topic = safe_topic.encode("utf-8")[:max(1, topic_budget)].decode("utf-8", errors="ignore")
+        clipped_topic = clipped_topic.rstrip(" ,-_&") or "Exam"
+        base = f"{clipped_topic}{marker}{tail}"
     if ext:
         ext = ext if ext.startswith(".") else f".{ext}"
         return f"{base}{ext}"
