@@ -2852,10 +2852,10 @@ def _save_queue_job_to_cloud(job: dict) -> tuple[bool, str]:
     return s_ok, s_msg
 
 
-def _set_number_conflict(job: dict, new_set: int) -> bool:
+def _set_number_conflict(job: dict, new_set: int, topic_override: str = "") -> bool:
     """Keep a topic/course's set number unique across the queue and library."""
     res = job.get("result") or {}
-    topic = res.get("meta_topic") or job.get("topic", "")
+    topic = topic_override or res.get("meta_topic") or job.get("topic", "")
     subject = res.get("meta_subject") or job.get("subject", "")
     year = res.get("meta_year") or job.get("year", "")
     level = res.get("meta_diff") or job.get("level", "")
@@ -2883,24 +2883,29 @@ def _set_number_conflict(job: dict, new_set: int) -> bool:
     return False
 
 
-def _change_queue_job_set_number(job: dict, new_set: int) -> tuple[bool, str]:
-    """Rebuild a completed exam, then update its queue and cloud copies."""
+def _change_queue_job_set_number(job: dict, new_set: int, new_topic: str | None = None) -> tuple[bool, str]:
+    """Rebuild a completed exam after editing its set number or topic name."""
     res = job.get("result") or {}
     if job.get("status") != "COMPLETED" or not res.get("questions_text"):
         return False, "This exam is not ready to edit."
     old_set = int(res.get("meta_set") or job.get("meta_set") or 1)
-    if new_set == old_set:
-        return True, f"This exam is already Set {new_set}."
+    old_topic = res.get("meta_topic") or job.get("topic", "Exam")
+    topic = new_topic.strip() if new_topic is not None else old_topic
+    if not topic:
+        return False, "Enter a topic name."
+    if re.search(r"\bSet\s*\d+\s*$", topic, re.IGNORECASE):
+        return False, "Enter the topic name without a set number; use Change Set # for that."
+    if new_set == old_set and topic == old_topic:
+        return True, "The topic name and set number are already up to date."
     if new_set < 1 or new_set > 999:
         return False, "Choose a set number from 1 to 999."
     try:
-        if _set_number_conflict(job, new_set):
-            return False, f"Set {new_set} is already used for this topic and course."
+        if _set_number_conflict(job, new_set, topic):
+            return False, f"This topic already has Set {new_set} for this course."
     except Exception as exc:
         _log_error("check_set_number_conflict", exc)
         return False, "Could not check whether that set number is already used. Please try again."
 
-    topic = res.get("meta_topic") or job.get("topic", "Exam")
     display_topic = f"{topic} Set {new_set}"
     year = res.get("meta_year") or job.get("year", "")
     subject = res.get("meta_subject") or job.get("subject", "")
@@ -2931,7 +2936,8 @@ def _change_queue_job_set_number(job: dict, new_set: int) -> tuple[bool, str]:
                 return False, "The saved exam could not be found in the library."
             saved_exam = saved_rows[0]
             saved_set_match = re.search(r"\bSet\s*(\d+)\b", saved_exam.get("topic", ""), re.IGNORECASE)
-            if saved_set_match and int(saved_set_match.group(1)) != old_set:
+            saved_topic = re.sub(r"\s*\(Yr[^)]*\)\s*Set\s*\d+.*$", "", saved_exam.get("topic", ""), flags=re.IGNORECASE).strip()
+            if (saved_set_match and int(saved_set_match.group(1)) != old_set) or (saved_topic and saved_topic != old_topic):
                 return False, "This exam was changed in the library. Refresh and edit the current library copy."
             if _exam_has_solutions(saved_exam) and not res.get("solutions_text"):
                 return False, "The library copy has newer worked solutions. Change its set number in the library to keep them."
@@ -2959,15 +2965,16 @@ def _change_queue_job_set_number(job: dict, new_set: int) -> tuple[bool, str]:
             return False, f"Could not update the cloud library: {save_result}"
 
     res.update({
-        "meta_set": new_set, "display_topic": display_topic,
+        "meta_topic": topic, "meta_set": new_set, "display_topic": display_topic,
         "pdf_bytes": pdf_bytes, "tex_bytes": tex_bytes, "word_bytes": word_bytes,
         "compiler_log": log, "word_skip_reason": word_reason,
     })
     job["meta_set"] = new_set
+    job["topic"] = topic
     job["title"] = display_topic
     if st.session_state.get("loaded_queue_job_id") == job.get("id"):
         _load_job_into_session_state(res)
-    return True, f"Changed this exam to Set {new_set}."
+    return True, f"Updated this exam to {display_topic}."
 
 
 def render_exam_queue_dashboard():
@@ -3169,6 +3176,26 @@ def render_exam_queue_dashboard():
                     if st.button("💾 Update Set #", key=f"q_set_save_{jid}"):
                         with st.spinner("Updating exam and saved files..."):
                             ok, message = _change_queue_job_set_number(job, int(requested_set))
+                        if ok:
+                            st.toast(message)
+                            st.rerun()
+                        else:
+                            st.error(message)
+
+                topic_col, topic_save_col = st.columns([3, 2], vertical_alignment="bottom")
+                with topic_col:
+                    requested_topic = st.text_input(
+                        "Change Topic Name",
+                        value=res.get("meta_topic") or job.get("topic", ""),
+                        key=f"q_topic_edit_{jid}_{hashlib.sha1(str(res.get('meta_topic') or '').encode()).hexdigest()[:8]}",
+                        help="Change the worksheet title and rebuild its PDF and Word file. The questions stay the same.",
+                    )
+                with topic_save_col:
+                    if st.button("💾 Update Topic Name", key=f"q_topic_save_{jid}"):
+                        with st.spinner("Updating exam and saved files..."):
+                            ok, message = _change_queue_job_set_number(
+                                job, int(res.get("meta_set") or job.get("meta_set") or 1), requested_topic
+                            )
                         if ok:
                             st.toast(message)
                             st.rerun()
@@ -4042,16 +4069,30 @@ def _get_exam_solutions_from_storage(pdf_url: str) -> str:
     return ""
 
 
-def _change_library_exam_set_number(exam: dict, new_set: int) -> tuple[bool, str]:
-    """Rebuild saved files even if the listing already shows the requested set."""
+def _library_exam_topic_name(topic_str: str) -> str:
+    """Remove the library's year/set suffix from its editable topic name."""
+    match = re.search(r"\bSet\s*\d+\b", topic_str, re.IGNORECASE)
+    topic = re.sub(r"\s*\(Yr[^)]*\)\s*Set\s*\d+.*$", "", topic_str, flags=re.IGNORECASE).strip()
+    if topic == topic_str and match:
+        topic = topic_str[:match.start()].strip()
+    return topic
+
+
+def _change_library_exam_set_number(exam: dict, new_set: int, new_topic: str | None = None) -> tuple[bool, str]:
+    """Rebuild saved files after editing their set number or topic name."""
     topic_str = exam.get("topic", "")
     match = re.search(r"\bSet\s*(\d+)\b", topic_str, re.IGNORECASE)
     old_set = int(match.group(1)) if match else 1
-    clean_topic = re.sub(r"\s*\(Yr[^)]*\)\s*Set\s*\d+.*$", "", topic_str, flags=re.IGNORECASE).strip()
-    if clean_topic == topic_str and match:
-        clean_topic = topic_str[:match.start()].strip()
+    clean_topic = _library_exam_topic_name(topic_str)
     if not clean_topic:
         return False, "Could not identify this exam's topic."
+    target_topic = new_topic.strip() if new_topic is not None else clean_topic
+    if not target_topic:
+        return False, "Enter a topic name."
+    if re.search(r"\bSet\s*\d+\s*$", target_topic, re.IGNORECASE):
+        return False, "Enter the topic name without a set number; use Change Set # for that."
+    if new_set < 1 or new_set > 999:
+        return False, "Choose a set number from 1 to 999."
     subject = exam.get("subject", "")
     year = exam.get("year_group", "")
     level = exam.get("difficulty", "")
@@ -4059,7 +4100,7 @@ def _change_library_exam_set_number(exam: dict, new_set: int) -> tuple[bool, str
         if any(
             queued.get("status") == "COMPLETED"
             and str((queued.get("result") or {}).get("saved_exam_id")) != str(exam.get("id"))
-            and (queued.get("result") or {}).get("meta_topic") == clean_topic
+            and (queued.get("result") or {}).get("meta_topic") == target_topic
             and queued.get("subject") == subject and queued.get("year") == year
             and queued.get("level") == level and int(queued.get("meta_set") or 0) == new_set
             for queued in GLOBAL_JOB_QUEUE.values()
@@ -4069,11 +4110,11 @@ def _change_library_exam_set_number(exam: dict, new_set: int) -> tuple[bool, str
         rows = (
             supabase_client.table("saved_exams").select("id,topic")
             .eq("subject", subject).eq("year_group", year).eq("difficulty", level)
-            .ilike("topic", f"{clean_topic}%Set {new_set}%").execute()
+            .ilike("topic", f"{target_topic}%Set {new_set}%").execute()
         ).data or []
         if any(
             str(row.get("id")) != str(exam.get("id"))
-            and row.get("topic", "").startswith(f"{clean_topic} (")
+            and row.get("topic", "").startswith(f"{target_topic} (")
             and re.search(rf"\bSet\s*{new_set}\b", row.get("topic", ""), re.IGNORECASE)
             for row in rows
         ):
@@ -4090,7 +4131,7 @@ def _change_library_exam_set_number(exam: dict, new_set: int) -> tuple[bool, str
     if has_solutions and not s_text:
         return False, "The worked solution source is unavailable, so this exam cannot be rebuilt safely."
 
-    display_topic = f"{clean_topic} Set {new_set}"
+    display_topic = f"{target_topic} Set {new_set}"
     title = f"{year} {subject}{' ' + level if level else ''}".strip()
     total_q = len(re.findall(r"\\item\b", q_text)) or 10
     work_dir = tempfile.mkdtemp(prefix="da_lib_set_edit_")
@@ -4112,7 +4153,7 @@ def _change_library_exam_set_number(exam: dict, new_set: int) -> tuple[bool, str
 
     audit_meta = _get_audit_meta_from_storage(exam.get("pdf_url", ""))
     ok, result = save_to_supabase(
-        clean_topic, subject, year, level, new_set, pdf_bytes, word_bytes,
+        target_topic, subject, year, level, new_set, pdf_bytes, word_bytes,
         num_mc=count("MC"), num_easy=count("Easy"), num_med=count("Med(?:ium)?"),
         num_hard=count("Hard"), num_xh=count("Ext"), existing_id=exam.get("id"),
         cost=exam.get("cost") if exam.get("cost") is not None else audit_meta.get("total_cost"),
@@ -4131,22 +4172,23 @@ def _change_library_exam_set_number(exam: dict, new_set: int) -> tuple[bool, str
             queued_result = queued_job.get("result") or {}
             if str(queued_result.get("saved_exam_id")) == str(exam.get("id")):
                 queued_result.update({
-                    "meta_set": new_set, "display_topic": display_topic,
+                    "meta_topic": target_topic, "meta_set": new_set, "display_topic": display_topic,
                     "pdf_bytes": pdf_bytes, "tex_bytes": tex_bytes,
                     "word_bytes": word_bytes, "compiler_log": log,
                     "word_skip_reason": word_reason,
                 })
                 queued_job["meta_set"] = new_set
+                queued_job["topic"] = target_topic
                 queued_job["title"] = display_topic
     if str(st.session_state.get("saved_exam_id")) == str(exam.get("id")):
         st.session_state.update({
-            "meta_set": new_set, "display_topic": display_topic,
+            "meta_topic": target_topic, "meta_set": new_set, "display_topic": display_topic,
             "pdf_bytes": pdf_bytes, "tex_bytes": tex_bytes, "word_bytes": word_bytes,
             "compiler_log": log, "word_skip_reason": word_reason,
         })
-    if new_set == old_set:
+    if new_set == old_set and target_topic == clean_topic:
         return True, f"Rebuilt the PDF and Word file as Set {new_set}."
-    return True, f"Changed this exam and its files to Set {new_set}."
+    return True, f"Updated this exam and its files to {display_topic}."
 
 
 def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
@@ -4558,6 +4600,24 @@ if app_mode == "📚 Exam Library":
                             if st.button(set_button_label, key=f"btn_save_set_{exam['id']}"):
                                 with st.spinner("Rebuilding exam and updating saved files..."):
                                     ok, message = _change_library_exam_set_number(exam, int(new_set_val))
+                                if ok:
+                                    st.toast(message)
+                                    st.rerun()
+                                else:
+                                    st.error(message)
+
+                        topic_col, topic_save_col = st.columns([3, 2], vertical_alignment="bottom")
+                        with topic_col:
+                            library_topic_name = st.text_input(
+                                "Change Topic Name",
+                                value=_library_exam_topic_name(exam.get("topic", "")),
+                                key=f"edit_topic_{exam['id']}_{hashlib.sha1(str(exam.get('topic') or '').encode()).hexdigest()[:8]}",
+                                help="Rename the worksheet and rebuild its saved PDF and Word file. The questions stay the same.",
+                            )
+                        with topic_save_col:
+                            if st.button("💾 Update Topic Name", key=f"btn_save_topic_{exam['id']}"):
+                                with st.spinner("Rebuilding exam and updating saved files..."):
+                                    ok, message = _change_library_exam_set_number(exam, cur_set, library_topic_name)
                                 if ok:
                                     st.toast(message)
                                     st.rerun()
