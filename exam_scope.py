@@ -1,6 +1,30 @@
 """Turn the teacher's topic selections into an explicit exam content boundary."""
 
 
+def build_requested_topics(topic_catalog, selected_topics, selected_subtopics):
+    """Include parent chapters for directly selected subtopics without widening their scope."""
+    labels = list(selected_topics)
+    for selection in selected_subtopics:
+        if " — " not in selection:
+            continue
+        parent = selection.rsplit(" — ", 1)[1]
+        if parent not in labels:
+            labels.append(parent)
+
+    requested = []
+    for label in labels:
+        if label not in topic_catalog:
+            continue
+        entry = topic_catalog[label].copy()
+        entry["selected_subtopics"] = [
+            selection.rsplit(" — ", 1)[0]
+            for selection in selected_subtopics
+            if selection.endswith(f" — {label}")
+        ]
+        requested.append(entry)
+    return requested
+
+
 def build_exam_scope(requested_topics, custom_topic="", custom_subtopic="", has_upload=False):
     lines = [
         "REQUESTED CONTENT SCOPE (STRICT, FOR EVERY QUESTION AND ITS FULL SOLUTION):",

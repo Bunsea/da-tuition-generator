@@ -21,7 +21,7 @@ from PIL import Image, ImageOps
 import hashlib
 import json
 from datetime import datetime, timezone
-from exam_scope import build_exam_scope
+from exam_scope import build_exam_scope, build_requested_topics
 from cost_display import deepseek_cost_label
 
 try:
@@ -4658,11 +4658,15 @@ for y in year_group:
                 available_topics.append(label)
                 chapter_name = re.sub(r"^\d+[.\-]\s*", "", t).strip()
                 chapter = next((c for c in (course or {}).get("chapters", []) if c["name"].casefold() == chapter_name.casefold()), None)
+                if not chapter:
+                    chapter_number = re.match(r"^(\d+)[.\-]", t)
+                    if chapter_number:
+                        chapter = next((c for c in (course or {}).get("chapters", []) if str(c.get("num")) == chapter_number.group(1)), None)
                 topic_subtopics[label] = chapter.get("subtopics", []) if chapter else []
                 topic_catalog[label] = {
                     "year": y,
                     "level": selected_level,
-                    "name": chapter_name,
+                    "name": chapter["name"] if chapter else chapter_name,
                     "all_subtopics": topic_subtopics[label],
                 }
 
@@ -4672,7 +4676,7 @@ with c4:
         selected_topics = st.multiselect(
             "Topic (Select from syllabus)",
             available_topics,
-            help="Select one or more topics from the curriculum, or leave empty and type your own custom topic below.",
+            help="Select one or more topics, or leave this empty and choose subtopics directly.",
             key="sel_topics_multi",
         )
         custom_topic_text = st.text_input(
@@ -4694,13 +4698,22 @@ with c4:
         )
         topic = [custom_topic_text.strip()] if custom_topic_text.strip() else []
 with c5:
-    subtopic_options = [f"{section} — {selected_topic}" for selected_topic in selected_topics for section in topic_subtopics.get(selected_topic, [])] if available_topics else []
+    subtopic_options = [
+        f"{section} — {topic_label}"
+        for topic_label in available_topics
+        for section in topic_subtopics.get(topic_label, [])
+    ]
     if subtopic_options:
-        selected_subtopics = st.multiselect("Subtopics (Optional)", subtopic_options, key="sel_subtopics_multi")
+        selected_subtopics = st.multiselect(
+            "Subtopics (Select directly or narrow a topic)",
+            subtopic_options,
+            key="sel_subtopics_multi",
+            help="Choose subtopics without selecting a topic first. Questions will cover only the subtopics you choose.",
+        )
     else:
         selected_subtopics = []
-    custom_subtopic = st.text_input("Or Custom Subtopic (Optional)", placeholder="e.g. Slope Fields")
-    sub_topic = ", ".join([item.split(" — ", 1)[0] for item in selected_subtopics] + ([custom_subtopic.strip()] if custom_subtopic.strip() else []))
+    custom_subtopic = st.text_input("Or Custom Subtopic (type your own)", placeholder="e.g. Slope Fields")
+    sub_topic = ", ".join([item.rsplit(" — ", 1)[0] for item in selected_subtopics] + ([custom_subtopic.strip()] if custom_subtopic.strip() else []))
 with c6:
     set_number_input = st.number_input(
         "Set #",
@@ -4796,7 +4809,12 @@ if total_q > 60:
 st.markdown("### 🖨️ Format & Spacing")
 layout_mode = st.radio("Layout:", ["Worksheet (No working out space)", "Exam (Space for working out)"], horizontal=True, label_visibility="collapsed")
 
-safe_topic = topic[0] if isinstance(topic, list) and len(topic) > 0 else (topic if isinstance(topic, str) else "")
+sample_topic_labels = list(selected_topics)
+for selection in selected_subtopics:
+    parent_label = selection.rsplit(" — ", 1)[-1]
+    if parent_label in topic_catalog and parent_label not in sample_topic_labels:
+        sample_topic_labels.append(parent_label)
+safe_topic = sample_topic_labels[0] if sample_topic_labels else (topic[0] if isinstance(topic, list) and topic else "")
 
 combined_samples = []
 msgs = []
@@ -4804,12 +4822,12 @@ for y in year_group:
     for selected_level in (actual_levels or [""]):
         target_topic = safe_topic
         yr_num = re.sub(r"\D", "", y)
-        if isinstance(topic, list) and topic:
+        if sample_topic_labels:
             badge = f"(Yr {yr_num}" + (f", {selected_level}" if selected_level else "") + ")"
-            matching = [t for t in topic if t.endswith(badge)]
+            matching = [t for t in sample_topic_labels if t.endswith(badge)]
             if matching:
                 target_topic = matching[0]
-            elif any(re.search(r"\((?:Yr|Year)\s*\d+", t, re.IGNORECASE) for t in topic):
+            elif any(re.search(r"\((?:Yr|Year)\s*\d+", t, re.IGNORECASE) for t in sample_topic_labels):
                 target_topic = ""
         s, m = load_style_samples(y, subject, selected_level, target_topic)
         if s and s not in combined_samples:
@@ -4877,6 +4895,7 @@ with btn_col2:
 
 if generate_btn:
     is_topic_empty = not topic or (isinstance(topic, str) and not topic.strip())
+    has_subtopic = bool(selected_subtopics or custom_subtopic.strip())
     has_uploaded_photos = bool(uploaded_photos) if isinstance(uploaded_photos, list) else (uploaded_photos is not None)
     has_pasted_photos = bool(st.session_state.get("pasted_photos"))
     has_upload = has_uploaded_photos or has_pasted_photos
@@ -4884,8 +4903,8 @@ if generate_btn:
         st.error("🚨 Action Required: Please select at least one **Year** group from the dropdown above.")
     elif subject == "Maths" and not actual_levels and any(y in year_group for y in ("Year 9", "Year 10", "Year 11", "Year 12")):
         st.error("🚨 Action Required: Please select at least one **Level**.")
-    elif is_topic_empty and not has_upload:
-        st.error("🚨 Action Required: Please enter or select a **Topic**, or upload/paste photo(s) for the AI to extract.")
+    elif is_topic_empty and not has_subtopic and not has_upload:
+        st.error("🚨 Action Required: Please select a **Topic** or **Subtopic**, type one, or upload/paste photo(s) for the AI to extract.")
     elif total_q == 0:
         st.error("🚨 Action Required: Please select at least one question to generate.")
     else:
@@ -4898,7 +4917,7 @@ if generate_btn:
                 st.error("⚠️ The AI engine isn't configured (missing server API key). Please contact tech support before using the generator.")
             st.stop()
 
-        if is_topic_empty and has_upload:
+        if is_topic_empty and not has_subtopic and has_upload:
             clean_topic = "Topics from Attached Document"
         else:
             topic_list = topic if isinstance(topic, list) else [topic]
@@ -4911,7 +4930,7 @@ if generate_btn:
             ])
             if sub_topic:
                 safe_sub = sub_topic.replace("/", "-").replace("\\", "-")
-                raw_t = f"{raw_t} - {safe_sub}"
+                raw_t = f"{raw_t} - {safe_sub}" if raw_t else safe_sub
             clean_topic = clean_redundant_topic_prefix(raw_t, ", ".join(year_group), subject, actual_level) or raw_t
 
         grades_string = ", ".join(year_group)
@@ -4937,15 +4956,7 @@ if generate_btn:
                 "type": p["type"],
             })
 
-        requested_topics = []
-        for selected_topic in selected_topics:
-            entry = topic_catalog[selected_topic].copy()
-            entry["selected_subtopics"] = [
-                item.removesuffix(f" — {selected_topic}")
-                for item in selected_subtopics
-                if item.endswith(f" — {selected_topic}")
-            ]
-            requested_topics.append(entry)
+        requested_topics = build_requested_topics(topic_catalog, selected_topics, selected_subtopics)
 
         job_params = {
             "api_key": api_key,
