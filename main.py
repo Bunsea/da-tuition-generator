@@ -1697,6 +1697,41 @@ def _request_exam_draft_repair(client, model_name, payload, config, raw_text, is
     return client.models.generate_content(model=model_name, contents=payload + [repair_prompt], config=config)
 
 
+_PHASE2_SOLUTIONS_INSTRUCTION = (
+    "\n\nPHASE 2 INSTRUCTION: Solve EVERY question independently, step by step, without assuming the draft Answer Key is correct.\n"
+    "1. First, generate comprehensive step-by-step fully worked solutions for these EXACT questions inside ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===.\n"
+    "   - MANDATORY DIAGRAMS IN WORKED SOLUTIONS: You MUST ALWAYS include visual diagrams (using Native TikZ or the Python Graph Engine) in the fully worked solutions whenever a diagram helps the student visualize, follow, or understand the working out (e.g. geometric proofs, vector triangles/addition, coordinate geometry sketches, integration regions/areas between curves, sign diagrams, normal distribution shading, or 3D angles). Do NOT rely purely on text and algebra when a visual sketch aids understanding.\n"
+    "   - Group trivial algebra. Show all key mathematical steps and justifications. Never use \\tag inside $$ ... $$ or \\[ ... \\]; use \\qquad (1) if numbering equations.\n"
+    "2. Second (CRITICAL ANSWER-KEY SYNC): Immediately after ===LATEX_SOLUTIONS_END===, output a verified short Answer Key inside ===LATEX_ANSWERS_START=== and ===LATEX_ANSWERS_END===.\n"
+    "   - Every single answer in ===LATEX_ANSWERS_START=== (including every Multiple Choice letter AND every Free-Response final value) MUST 100% match the final result proved in your worked solutions.\n"
+    "   - If the original draft Answer Key contained ANY mistake or discrepancy, correct it here so the Answer Key and Worked Solutions agree completely.\n"
+    "   - Use the exact same \\section*{Section X} and \\begin{enumerate} structure with concise inline math ($...$)."
+)
+
+
+def _parse_solutions_and_verified_answers(raw_s_out: str, fallback_answers: str) -> tuple[str, str]:
+    """Extract sanitized worked solutions and synchronize the Answer Key if a complete verified key was emitted."""
+    if not raw_s_out:
+        return "", fallback_answers
+    s_m = re.search(
+        r"===?\s*LATEX_SOLUTIONS_START\s*===?(.*?)(?:===?\s*LATEX_SOLUTIONS_END\s*===?|===?\s*LATEX_ANSWERS_START|$)",
+        raw_s_out,
+        re.DOTALL | re.IGNORECASE,
+    )
+    s_sanitized = sanitize_ai_latex(s_m.group(1).strip() if s_m else "")
+
+    a_m = re.search(
+        r"===?\s*LATEX_ANSWERS_START\s*===?(.*?)===?\s*LATEX_ANSWERS_END\s*===?",
+        raw_s_out,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if a_m:
+        cand_raw = a_m.group(1).strip()
+        if cand_raw and ("\\item" in cand_raw or "\\item" not in (fallback_answers or "")):
+            return s_sanitized, sanitize_ai_latex(cand_raw)
+    return s_sanitized, fallback_answers
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TEACHER ACCOUNTS & AUTHENTICATION MODULE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2514,7 +2549,7 @@ When instructed, your final combined output must follow this template structure 
                         )
                         _notify(f"🏃 {model_name}: Drafting Questions & Answers...")
                         p1_payload = ai_payload + [
-                            "\n\nPHASE 1 INSTRUCTION: You must generate the exam questions AND the answer key. First, generate the questions between ===LATEX_CONTENT_START=== and ===LATEX_CONTENT_END===. Then, immediately generate the short answers between ===LATEX_ANSWERS_START=== and ===LATEX_ANSWERS_END===. Do NOT generate fully worked solutions."
+                            "\n\nPHASE 1 INSTRUCTION: You must generate the exam questions AND the answer key. First, generate the questions between ===LATEX_CONTENT_START=== and ===LATEX_CONTENT_END===. Then, solve and double-check every question carefully (using Python Code Execution when enabled for numeric calculations) before writing the verified short answers between ===LATEX_ANSWERS_START=== and ===LATEX_ANSWERS_END===. Do NOT generate fully worked solutions."
                         ]
                         res1 = client.models.generate_content(model=model_name, contents=p1_payload, config=cfg)
                         if _stopped():
@@ -2695,9 +2730,7 @@ When instructed, your final combined output must follow this template structure 
             p2_payload = [
                 solutions_context_prompt,
                 out,
-                "\n\nPHASE 2 INSTRUCTION: Excellent. Now, generate the comprehensive step-by-step fully worked solutions for these EXACT questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===.\n"
-                "MANDATORY DIAGRAMS IN WORKED SOLUTIONS: You MUST ALWAYS include visual diagrams (using Native TikZ or the Python Graph Engine) in the fully worked solutions whenever a diagram helps the student visualize, follow, or understand the working out (e.g. geometric proofs, vector triangles/addition, coordinate geometry sketches, integration regions/areas between curves, sign diagrams, normal distribution shading, or 3D angles). Do NOT rely purely on text and algebra when a visual sketch aids understanding.\n"
-                "Group trivial algebra. Show all key mathematical steps and justifications. Never use \\tag inside $$ ... $$ or \\[ ... \\]; use \\qquad (1) if numbering equations.",
+                _PHASE2_SOLUTIONS_INSTRUCTION,
             ]
             s_out = None
             for s_model in models_to_try:
@@ -2719,7 +2752,7 @@ When instructed, your final combined output must follow this template structure 
                         raw_s = _extract_genai_text(res2)
                         if not raw_s or "LATEX_SOLUTIONS_START" not in raw_s:
                             raise ValueError("Solutions truncated. Retrying...")
-                        if "LATEX_SOLUTIONS_END" not in raw_s:
+                        if "LATEX_SOLUTIONS_END" not in raw_s and "LATEX_ANSWERS_START" not in raw_s:
                             raw_s += "\n===LATEX_SOLUTIONS_END==="
                         s_out = raw_s.replace("```latex", "").replace("```", "")
                         s_in, s_out_t, s_th, s_ca = _extract_usage_tokens(res2)
@@ -2738,8 +2771,7 @@ When instructed, your final combined output must follow this template structure 
                     break
 
             if s_out:
-                s_m = re.search(r"===?\s*LATEX_SOLUTIONS_START\s*===?(.*?)(?:===?\s*LATEX_SOLUTIONS_END\s*===?|$)", s_out, re.DOTALL | re.IGNORECASE)
-                s_sanitized = sanitize_ai_latex(s_m.group(1).strip() if s_m else "")
+                s_sanitized, a_sanitized = _parse_solutions_and_verified_answers(s_out, a_sanitized)
 
         if _stopped():
             return _cancelled_result()
@@ -4383,19 +4415,15 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
         client = _get_genai_client()
 
         sol_prompt = (
-            "You are a senior mathematics examiner. Below are the exam questions and their answer key in LaTeX.\n\n"
+            "You are a senior mathematics examiner. Below are the exam questions and their draft answer key in LaTeX.\n\n"
             "===QUESTIONS===\n" + q_text + "\n===END QUESTIONS===\n\n"
             "===ANSWERS===\n" + a_text + "\n===END ANSWERS===\n\n"
-            "Generate step-by-step FULLY WORKED SOLUTIONS for every question above.\n"
-            "Place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===.\n"
             "Rules:\n"
             "- Use LaTeX formatting (enumerate, align, etc.).\n"
-            "- MANDATORY DIAGRAMS IN SOLUTIONS: You MUST ALWAYS include visual diagrams (using Native TikZ or the Python Graph Engine) in the worked solutions whenever a diagram helps the student visualize, follow, or understand the working out (e.g. geometric proofs, vector addition/triangles, coordinate geometry sketches, integration regions/areas between curves, sign diagrams, normal distribution shading, or 3D angles). Do NOT rely purely on text and algebra when a visual sketch aids understanding.\n"
-            "- Show all key mathematical steps.\n"
-            "- Group trivial algebra.\n"
-            "- Do NOT regenerate the questions or answers — only generate the solutions.\n"
+            "- Do NOT regenerate the questions.\n"
             "- Do NOT generate \\documentclass, \\usepackage, \\begin{document}, \\end{document}.\n"
             "- Do NOT use \\tag inside $$ ... $$; use \\qquad (1) if numbering equations.\n"
+            + _PHASE2_SOLUTIONS_INSTRUCTION
         )
 
         models_to_try = _get_models_for_mode(st.session_state.get("efficiency_mode_select", "Balanced (Save Credits)"))
@@ -4419,7 +4447,7 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
                     raw_s = _extract_genai_text(res)
                     if not raw_s or "LATEX_SOLUTIONS_START" not in raw_s:
                         raise ValueError("Solutions truncated. Retrying...")
-                    if "LATEX_SOLUTIONS_END" not in raw_s:
+                    if "LATEX_SOLUTIONS_END" not in raw_s and "LATEX_ANSWERS_START" not in raw_s:
                         raw_s += "\n===LATEX_SOLUTIONS_END==="
                     s_out = raw_s.replace("```latex", "").replace("```", "")
                     break
@@ -4437,8 +4465,9 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
         if not s_out:
             return False, "All AI models failed to generate solutions. Please try again later."
 
-        s_m = re.search(r"===?\s*LATEX_SOLUTIONS_START\s*===?(.*?)(?:===?\s*LATEX_SOLUTIONS_END\s*===?|$)", s_out, re.DOTALL | re.IGNORECASE)
-        s_sanitized = sanitize_ai_latex(s_m.group(1).strip() if s_m else "Failed.")
+        s_sanitized, a_text = _parse_solutions_and_verified_answers(s_out, a_text)
+        if not s_sanitized:
+            s_sanitized = "Failed."
 
         # Reconstruct topic and title from DB record
         topic_str = exam.get("topic", "Unknown")
@@ -5349,9 +5378,7 @@ if st.session_state.questions_text:
 
                     p2_payload = (st.session_state.saved_ai_payload or []) + [
                         st.session_state.phase_1_raw,
-                        "\n\nPHASE 2 INSTRUCTION: Excellent. Now, generate the comprehensive step-by-step fully worked solutions for these EXACT questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===.\n"
-                        "MANDATORY DIAGRAMS IN WORKED SOLUTIONS: You MUST ALWAYS include visual diagrams (using Native TikZ or the Python Graph Engine) in the fully worked solutions whenever a diagram helps the student visualize, follow, or understand the working out (e.g. geometric proofs, vector triangles/addition, coordinate geometry sketches, integration regions/areas between curves, sign diagrams, normal distribution shading, or 3D angles). Do NOT rely purely on text and algebra when a visual sketch aids understanding.\n"
-                        "Group trivial algebra. Show all key mathematical steps and justifications. Never use \\tag inside $$ ... $$ or \\[ ... \\]; use \\qquad (1) if numbering equations.",
+                        _PHASE2_SOLUTIONS_INSTRUCTION,
                     ]
 
                     models_to_try = _get_models_for_mode(eff_mode)
@@ -5378,7 +5405,7 @@ if st.session_state.questions_text:
                                 if not raw_s or "LATEX_SOLUTIONS_START" not in raw_s:
                                     raise ValueError("Solutions truncated. Retrying...")
 
-                                if "LATEX_SOLUTIONS_END" not in raw_s:
+                                if "LATEX_SOLUTIONS_END" not in raw_s and "LATEX_ANSWERS_START" not in raw_s:
                                     raw_s += "\n===LATEX_SOLUTIONS_END==="
 
                                 s_out = raw_s.replace("```latex", "").replace("```", "")
@@ -5402,16 +5429,19 @@ if st.session_state.questions_text:
                             break
 
                     if s_out:
-                        s_m = re.search(r"===?\s*LATEX_SOLUTIONS_START\s*===?(.*?)(?:===?\s*LATEX_SOLUTIONS_END\s*===?|$)", s_out, re.DOTALL | re.IGNORECASE)
-                        s_sanitized = sanitize_ai_latex(s_m.group(1).strip() if s_m else "Failed.")
+                        s_sanitized, verified_answers = _parse_solutions_and_verified_answers(s_out, st.session_state.answers_text)
+                        if not s_sanitized:
+                            s_sanitized = "Failed."
                         st.session_state.solutions_text = s_sanitized
+                        st.session_state.answers_text = verified_answers
+                        st.session_state.cloud_saved = False
 
                         title = f"{st.session_state.meta_year} {st.session_state.meta_subject}{lvl_str}".strip()
                         work_dir = _get_or_create_work_dir()
 
                         p_bytes, t_bytes, w_bytes, log, word_reason = _render_exam_files(
                             work_dir, st.session_state.display_topic, title,
-                            st.session_state.questions_text, st.session_state.answers_text, s_sanitized,
+                            st.session_state.questions_text, verified_answers, s_sanitized,
                             st.session_state.meta_n,
                         )
 
