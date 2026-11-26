@@ -87,18 +87,30 @@ def format_job_sydney_time(dt):
     return time_str or date_str or (str(dt) if dt else "")
 
 
-def _prepare_uploaded_image(doc_bytes: bytes, filename: str) -> tuple[bytes, str]:
-    """Convert iPhone HEIC/HEIF photos to JPEG for the Gemini image payload."""
+def _prepare_uploaded_image(doc_bytes: bytes, filename: str, max_dim: int = 1600) -> tuple[bytes, str]:
+    """Normalize uploaded photos (HEIC/HEIF -> JPEG) and cap huge resolutions to save vision tokens."""
     extension = os.path.splitext(filename.lower())[1]
-    if extension in (".heic", ".heif"):
-        from pillow_heif import register_heif_opener
+    is_heic = extension in (".heic", ".heif")
+    try:
+        if is_heic:
+            from pillow_heif import register_heif_opener
+            register_heif_opener()
 
-        register_heif_opener()
         with Image.open(io.BytesIO(doc_bytes)) as image:
-            oriented_image = ImageOps.exif_transpose(image)
-            output = io.BytesIO()
-            oriented_image.convert("RGB").save(output, format="JPEG", quality=90)
-        return output.getvalue(), "image/jpeg"
+            oriented = ImageOps.exif_transpose(image)
+            needs_resize = oriented.width > max_dim or oriented.height > max_dim
+            if needs_resize:
+                oriented.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+
+            if is_heic or needs_resize or extension not in (".png", ".webp"):
+                out = io.BytesIO()
+                if extension == ".png" and not is_heic and oriented.mode in ("RGBA", "LA", "P"):
+                    oriented.save(out, format="PNG", optimize=True)
+                    return out.getvalue(), "image/png"
+                oriented.convert("RGB").save(out, format="JPEG", quality=82, optimize=True)
+                return out.getvalue(), "image/jpeg"
+    except Exception:
+        pass
 
     if extension == ".png":
         return doc_bytes, "image/png"
@@ -1497,6 +1509,107 @@ def _render_exam_files(work_dir, display_topic, title, q_text, a_text, s_text, t
 # ── AI CALL HELPERS ─────────────────────────────────────────────────────────────
 MAX_OUTPUT_TOKENS = 32768  # Generous budget so larger question sets aren't silently truncated
 
+# Paid Tier USD per 1M tokens: (uncached_input, cached_input, output_incl_thinking)
+GEMINI_MODEL_PRICING = {
+    "gemini-3.8-flash": (0.75, 0.075, 3.75),
+    "gemini-3.6-flash": (0.75, 0.075, 3.75),
+    "gemini-3.5-flash-lite": (0.30, 0.03, 2.50),
+    "gemini-4-hydrogen": (1.50, 0.075, 7.50),
+}
+
+_DEFAULT_SAFETY_SETTINGS = [
+    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
+]
+
+
+def _get_models_for_mode(efficiency_mode: str = "Balanced (Save Credits)") -> list[str]:
+    """Return ordered Gemini fallback chain for the selected efficiency mode."""
+    if "Lite" in (efficiency_mode or ""):
+        return ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.6-flash"]
+    return ["gemini-3.8-flash", "gemini-3.6-flash"]
+
+
+def _build_thinking_config(model_name: str, level: str | None = None):
+    """Build a ThinkingConfig compatible with both newer thinking_level and older thinking_budget SDKs."""
+    if not level or not hasattr(types, "ThinkingConfig"):
+        return None
+    norm = level.lower().strip()
+    if "3.8" in (model_name or "") and norm == "minimal":
+        norm = "low"  # gemini-3.8-flash rejects minimal
+
+    fields = getattr(types.ThinkingConfig, "model_fields", {}) or {}
+    if "thinking_level" in fields or "thinkingLevel" in fields:
+        try:
+            lvl_val = norm.upper()
+            if hasattr(types, "ThinkingLevel"):
+                lvl_val = getattr(types.ThinkingLevel, lvl_val, lvl_val)
+            return types.ThinkingConfig(thinking_level=lvl_val)
+        except Exception:
+            pass
+
+    if "thinking_budget" in fields or "thinkingBudget" in fields:
+        budget_map = {"minimal": 512, "low": 1024, "medium": 4096}
+        budget = budget_map.get(norm)
+        if budget is not None:
+            try:
+                return types.ThinkingConfig(thinking_budget=budget)
+            except Exception:
+                pass
+    return None
+
+
+def _build_gen_config(
+    model_name: str,
+    *,
+    max_output_tokens: int = MAX_OUTPUT_TOKENS,
+    tools=None,
+    thinking_level: str | None = None,
+) -> types.GenerateContentConfig:
+    """Create a GenerateContentConfig with standard safety filters and optional thinking cap."""
+    kwargs = {
+        "max_output_tokens": max_output_tokens,
+        "tools": tools if tools else None,
+        "safety_settings": _DEFAULT_SAFETY_SETTINGS,
+    }
+    t_cfg = _build_thinking_config(model_name, thinking_level)
+    if t_cfg is not None:
+        kwargs["thinking_config"] = t_cfg
+    return types.GenerateContentConfig(**kwargs)
+
+
+def _extract_usage_tokens(res) -> tuple[int, int, int, int]:
+    """Return (billed_input_tok, billed_output_tok, thought_tok, cached_tok) from usage_metadata."""
+    um = getattr(res, "usage_metadata", None) if res else None
+    if not um:
+        return 0, 0, 0, 0
+    prompt_tok = int(getattr(um, "prompt_token_count", 0) or 0)
+    tool_tok = int(getattr(um, "tool_use_prompt_token_count", 0) or 0)
+    cand_tok = int(getattr(um, "candidates_token_count", 0) or 0)
+    thought_tok = int(getattr(um, "thoughts_token_count", 0) or 0)
+    cached_tok = int(getattr(um, "cached_content_token_count", 0) or 0)
+    return prompt_tok + tool_tok, cand_tok + thought_tok, thought_tok, cached_tok
+
+
+def _compute_gemini_cost(
+    in_tok: int,
+    out_tok: int,
+    cached_tok: int = 0,
+    used_search: bool = False,
+    model_name: str = "gemini-3.8-flash",
+) -> float:
+    """Calculate Gemini API cost in USD including cached reads, thinking tokens, and search grounding."""
+    key = (model_name or "gemini-3.8-flash").strip().lower()
+    in_rate, cached_rate, out_rate = GEMINI_MODEL_PRICING.get(key, GEMINI_MODEL_PRICING["gemini-3.8-flash"])
+    eff_cached = min(max(0, int(cached_tok or 0)), max(0, int(in_tok or 0)))
+    uncached_in = max(0, int(in_tok or 0) - eff_cached)
+    in_cost = (uncached_in / 1_000_000) * in_rate + (eff_cached / 1_000_000) * cached_rate
+    out_cost = (max(0, int(out_tok or 0)) / 1_000_000) * out_rate
+    search_cost = 0.014 if used_search else 0.00
+    return round(in_cost + out_cost + search_cost, 5)
+
 _RETRYABLE_MARKERS = (
     "503", "500", "429", "404", "400", "unavailable", "overloaded",
     "internal", "resource_exhausted", "not found", "empty text",
@@ -2011,6 +2124,7 @@ def generate_exam_worker(params: dict, progress_cb=None, cancel_event=None) -> d
         auto_solutions = params.get("auto_solutions", False)
         use_deepseek_auditor = params.get("use_deepseek_auditor", False)
         deepseek_api_key = params.get("deepseek_api_key", "")
+        efficiency_mode = params.get("efficiency_mode", "Balanced (Save Credits)")
 
         has_upload = bool(uploaded_files_data)
         has_mc = num_mc > 0
@@ -2198,6 +2312,50 @@ def generate_exam_worker(params: dict, progress_cb=None, cancel_event=None) -> d
         style_block = f"STYLE & SYLLABUS REFERENCE:\n{style_samples}\n\n" if style_samples else ""
         custom_instructions_block = f"EXTRA TUTOR INSTRUCTIONS:\n{extra_instructions}\n\n" if extra_instructions.strip() else ""
 
+        diagram_rules_block = """DIAGRAM RULES (CRITICAL):
+- MANDATORY DIAGRAMS IN QUESTIONS: Whenever a question references a geometric figure, vector setup, 3D spatial arrangement, angle of elevation/depression, projectile trajectory, shaded area, network graph, or chart, you MUST render the accompanying diagram directly in the question using Native TikZ or the Python Graph Engine. NEVER refer to a diagram (e.g. "In the diagram below...", "The figure shows...") without actually generating the complete visual code for it!
+
+You have TWO graphing engines available. You MUST choose the correct one based on the diagram type.
+
+ENGINE 1: THE PYTHON ENGINE
+Use this strictly for continuous 2D Cartesian functions, derivatives, Projectile Motion trajectories, Slope Fields, and Normal Distributions.
+Syntax:
+GRAPH_START
+type: slope_field
+expr: x + y
+xmin: -5
+xmax: 5
+ymin: -5
+ymax: 5
+GRAPH_END
+
+ENGINE 2: NATIVE TikZ
+Use this strictly for structural geometry: Networks, Critical Paths, 3D Trig diagrams, 3D Vectors, Forces/Inclined Planes, and Box Plots. The compiler has `\\usepackage{tikz}` installed (do NOT use pgfplots). Inject your `\\begin{tikzpicture}` code directly into the LaTeX output.
+
+- BOX PLOTS & NUMBER LINES (CRITICAL):
+  * NEVER draw box plots using raw unscaled data coordinates if they exceed 12cm.
+  * ALWAYS scale your TikZ box plots so the entire number line spans between 10cm and 13cm in total width. Use `xscale` on the tikzpicture.
+  * For parallel box plots: Place group labels cleanly above the plots or with `node[left]`.
+
+CRITICAL GRAPHING REQUIREMENT:
+Whenever a question asks the student to "sketch" or "draw" a graph, you MUST provide the actual rendered graph in the Answers sections using the LaTeX `pgfplots` package. 
+- You must code the visual plot using \\begin{tikzpicture} \\begin{axis}[...] ... \\end{axis} \\end{tikzpicture}. 
+- NEVER just describe the graph in text. You must mathematically plot the curves, asymptotes, and intercepts using pgfplots.
+- NEVER use the setting `trig format plots=none`. If plotting trigonometric functions, use `trig format plots=rad` or omit the setting entirely.
+- PREVENT DIMENSION ERRORS: When plotting rational functions or graphs with vertical asymptotes, you MUST restrict the vertical plotting domain (`ymin=-10, ymax=10`, `restrict y to domain=-15:15`).
+- MANDATORY SEMICOLONS: Every single drawing command inside the axis environment MUST end with a semicolon (;).
+- TIKZ LABELS AND ANCHORS SECURING: Use explicit standard syntax (e.g., label=90:{$P_1$}).
+- TIKZ SYNTAX CRASH PREVENTION: NEVER place raw text inside a `\\draw` or `\\addplot` command path. Use a properly formatted `\\node`.
+- STRICT COORDINATE FORMATTING: When listing points in `\\addplot coordinates {...};`, output only raw coordinate pairs.
+- CHEMISTRY & SCIENCE EQUILIBRIUM GRAPHS (CRITICAL): Draw sudden disturbances with solid vertical lines at $t_1$. Use smooth continuous curves for gradual shifts."""
+
+        solutions_context_prompt = (
+            f'You are a NESA Examiner working on "{exam_focus}" for {grades_string}{level_text} in {subject}.\n'
+            f"{syllabus_ban}\n\n"
+            f"{diagram_rules_block}\n\n"
+            f"{custom_instructions_block}"
+        ).strip()
+
         prompt = f"""You are a NESA Examiner.
 Generate an examination on "{exam_focus}" for {grades_string}{level_text} in {subject}.
 
@@ -2233,42 +2391,7 @@ CRITICAL EXCEPTIONS:
 {syllabus_ban}
 {auto_name_rule}
 
-DIAGRAM RULES (CRITICAL):
-- MANDATORY DIAGRAMS IN QUESTIONS: Whenever a question references a geometric figure, vector setup, 3D spatial arrangement, angle of elevation/depression, projectile trajectory, shaded area, network graph, or chart, you MUST render the accompanying diagram directly in the question using Native TikZ or the Python Graph Engine. NEVER refer to a diagram (e.g. "In the diagram below...", "The figure shows...") without actually generating the complete visual code for it!
-
-You have TWO graphing engines available. You MUST choose the correct one based on the diagram type.
-
-ENGINE 1: THE PYTHON ENGINE
-Use this strictly for continuous 2D Cartesian functions, derivatives, Projectile Motion trajectories, Slope Fields, and Normal Distributions.
-Syntax:
-GRAPH_START
-type: slope_field
-expr: x + y
-xmin: -5
-xmax: 5
-ymin: -5
-ymax: 5
-GRAPH_END
-
-ENGINE 2: NATIVE TikZ
-Use this strictly for structural geometry: Networks, Critical Paths, 3D Trig diagrams, 3D Vectors, Forces/Inclined Planes, and Box Plots. The compiler has `\\usepackage{{tikz}}` installed (do NOT use pgfplots). Inject your `\\begin{{tikzpicture}}` code directly into the LaTeX output.
-
-- BOX PLOTS & NUMBER LINES (CRITICAL):
-  * NEVER draw box plots using raw unscaled data coordinates if they exceed 12cm.
-  * ALWAYS scale your TikZ box plots so the entire number line spans between 10cm and 13cm in total width. Use `xscale` on the tikzpicture.
-  * For parallel box plots: Place group labels cleanly above the plots or with `node[left]`.
-
-CRITICAL GRAPHING REQUIREMENT:
-Whenever a question asks the student to "sketch" or "draw" a graph, you MUST provide the actual rendered graph in the Answers sections using the LaTeX `pgfplots` package. 
-- You must code the visual plot using \\begin{{tikzpicture}} \\begin{{axis}}[...] ... \\end{{axis}} \\end{{tikzpicture}}. 
-- NEVER just describe the graph in text. You must mathematically plot the curves, asymptotes, and intercepts using pgfplots.
-- NEVER use the setting `trig format plots=none`. If plotting trigonometric functions, use `trig format plots=rad` or omit the setting entirely.
-- PREVENT DIMENSION ERRORS: When plotting rational functions or graphs with vertical asymptotes, you MUST restrict the vertical plotting domain (`ymin=-10, ymax=10`, `restrict y to domain=-15:15`).
-- MANDATORY SEMICOLONS: Every single drawing command inside the axis environment MUST end with a semicolon (;).
-- TIKZ LABELS AND ANCHORS SECURING: Use explicit standard syntax (e.g., label=90:{{$P_1$}}).
-- TIKZ SYNTAX CRASH PREVENTION: NEVER place raw text inside a `\\draw` or `\\addplot` command path. Use a properly formatted `\\node`.
-- STRICT COORDINATE FORMATTING: When listing points in `\\addplot coordinates {{...}};`, output only raw coordinate pairs.
-- CHEMISTRY & SCIENCE EQUILIBRIUM GRAPHS (CRITICAL): Draw sudden disturbances with solid vertical lines at $t_1$. Use smooth continuous curves for gradual shifts.
+{diagram_rules_block}
 
 {custom_instructions_block}
 When instructed, your final combined output must follow this template structure exactly:
@@ -2296,9 +2419,11 @@ When instructed, your final combined output must follow this template structure 
                         import pypdfium2 as pdfium
                         pdf = pdfium.PdfDocument(doc_bytes)
                         for page in pdf:
-                            pil_image = page.render(scale=2.0).to_pil()
+                            pil_image = page.render(scale=1.35).to_pil()
+                            if pil_image.width > 1400 or pil_image.height > 1400:
+                                pil_image.thumbnail((1400, 1400), Image.Resampling.LANCZOS)
                             buf = io.BytesIO()
-                            pil_image.save(buf, format="JPEG", quality=85)
+                            pil_image.save(buf, format="JPEG", quality=78, optimize=True)
                             ai_payload.append(types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg"))
                         rendered_any = True
                     except Exception:
@@ -2340,20 +2465,35 @@ When instructed, your final combined output must follow this template structure 
             )
 
         live_search_subjects = ["Business Studies", "Legal Studies", "Science"]
-        active_tools = [types.Tool(code_execution=types.ToolCodeExecution())]
+        is_stem = subject in ("Maths", "Science")
+        active_tools = [types.Tool(code_execution=types.ToolCodeExecution())] if is_stem else []
         used_search = bool(subject in live_search_subjects and use_live_search)
         if used_search:
             active_tools.append(types.Tool(google_search=types.GoogleSearch()))
 
-        models_to_try = [
-            "gemini-3.8-flash",
-            "gemini-3.6-flash",
-        ]
+        # Tune thinking depth by efficiency mode and problem complexity to avoid excessive thinking-token spend
+        has_hard_items = (num_hard + num_xh) > 0
+        if "Maximum" in efficiency_mode:
+            p1_thinking = "high" if is_stem else "medium"
+            p2_thinking = "medium"
+            refine_thinking = "medium"
+        elif "Lite" in efficiency_mode:
+            p1_thinking = "low"
+            p2_thinking = "low"
+            refine_thinking = "low"
+        else:
+            p1_thinking = "medium" if (is_stem and (has_hard_items or has_upload)) else "low"
+            p2_thinking = "medium" if (is_stem and (has_hard_items or num_med > 0)) else "low"
+            refine_thinking = "low"
+
+        models_to_try = _get_models_for_mode(efficiency_mode)
         out = None
         last_error = None
         model_used = None
         in_tok = 0
         out_tok = 0
+        thought_tok = 0
+        cached_tok = 0
 
         max_retries = 3
         repairs_remaining = 2
@@ -2366,15 +2506,11 @@ When instructed, your final combined output must follow this template structure 
                     if _stopped():
                         return _cancelled_result()
                     try:
-                        cfg = types.GenerateContentConfig(
+                        cfg = _build_gen_config(
+                            model_name,
                             max_output_tokens=cur_max_tok,
-                            tools=t_list if t_list else None,
-                            safety_settings=[
-                                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                            ],
+                            tools=t_list,
+                            thinking_level=p1_thinking,
                         )
                         _notify(f"🏃 {model_name}: Drafting Questions & Answers...")
                         p1_payload = ai_payload + [
@@ -2384,23 +2520,33 @@ When instructed, your final combined output must follow this template structure 
                         if _stopped():
                             return _cancelled_result()
                         raw_text = _extract_genai_text(res1)
-                        if res1.usage_metadata:
-                            in_tok += getattr(res1.usage_metadata, "prompt_token_count", 0)
-                            out_tok += getattr(res1.usage_metadata, "candidates_token_count", 0)
+                        u_in, u_out, u_th, u_ca = _extract_usage_tokens(res1)
+                        in_tok += u_in
+                        out_tok += u_out
+                        thought_tok += u_th
+                        cached_tok += u_ca
                         issue = _exam_draft_issue(raw_text)
                         if issue:
                             if not repairs_remaining:
                                 raise ValueError(f"{model_name} returned an incomplete exam draft: {issue}.")
                             repairs_remaining -= 1
                             _notify(f"🔧 {model_name}: Repairing incomplete draft ({issue})...")
+                            repair_cfg = _build_gen_config(
+                                model_name,
+                                max_output_tokens=cur_max_tok,
+                                tools=None,
+                                thinking_level="low",
+                            )
                             repaired = _request_exam_draft_repair(
-                                client, model_name, p1_payload, cfg, raw_text, issue, total_q
+                                client, model_name, [solutions_context_prompt, "\n\n" + p1_payload[-1]], repair_cfg, raw_text, issue, total_q
                             )
                             if _stopped():
                                 return _cancelled_result()
-                            if repaired.usage_metadata:
-                                in_tok += getattr(repaired.usage_metadata, "prompt_token_count", 0)
-                                out_tok += getattr(repaired.usage_metadata, "candidates_token_count", 0)
+                            r_in, r_out, r_th, r_ca = _extract_usage_tokens(repaired)
+                            in_tok += r_in
+                            out_tok += r_out
+                            thought_tok += r_th
+                            cached_tok += r_ca
                             raw_text = _extract_genai_text(repaired)
                             issue = _exam_draft_issue(raw_text)
                             if issue:
@@ -2473,24 +2619,25 @@ When instructed, your final combined output must follow this template structure 
                         "===LATEX_CONTENT_START=== ... ===LATEX_CONTENT_END===\n"
                         "===LATEX_ANSWERS_START=== ... ===LATEX_ANSWERS_END===\n"
                     )
-                    refine_models = ["gemini-3.8-flash", "gemini-3.6-flash"]
+                    refine_contents = [
+                        solutions_context_prompt,
+                        "\n\nCURRENT EXAM DRAFT TO FIX:\n" + out,
+                        "\n\n" + refine_prompt,
+                    ]
+                    refine_models = _get_models_for_mode(efficiency_mode)
                     for r_model in refine_models:
                         if _stopped():
                             return _cancelled_result()
-                        cur_ref_tok = MAX_OUTPUT_TOKENS
                         try:
-                            ref_cfg = types.GenerateContentConfig(
-                                max_output_tokens=cur_ref_tok,
-                                safety_settings=[
-                                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                ],
+                            ref_cfg = _build_gen_config(
+                                r_model,
+                                max_output_tokens=MAX_OUTPUT_TOKENS,
+                                tools=None,
+                                thinking_level=refine_thinking,
                             )
                             res_refined = client.models.generate_content(
                                 model=r_model,
-                                contents=ai_payload + [refine_prompt],
+                                contents=refine_contents,
                                 config=ref_cfg,
                             )
                             if _stopped():
@@ -2506,9 +2653,11 @@ When instructed, your final combined output must follow this template structure 
                                     raw_ref += "\n===LATEX_ANSWERS_END==="
                                 out = raw_ref.replace("```latex", "").replace("```", "")
                                 audit_res["auto_corrected"] = True
-                                if res_refined.usage_metadata:
-                                    in_tok += getattr(res_refined.usage_metadata, "prompt_token_count", 0)
-                                    out_tok += getattr(res_refined.usage_metadata, "candidates_token_count", 0)
+                                rf_in, rf_out, rf_th, rf_ca = _extract_usage_tokens(res_refined)
+                                in_tok += rf_in
+                                out_tok += rf_out
+                                thought_tok += rf_th
+                                cached_tok += rf_ca
                                 break
                         except Exception:
                             if _stopped():
@@ -2536,13 +2685,15 @@ When instructed, your final combined output must follow this template structure 
         q_sanitized = sanitize_ai_latex(c_m.group(1).strip() if c_m else "Failed.")
         a_sanitized = sanitize_ai_latex(a_m.group(1).strip() if a_m else "Failed.")
 
-        # Phase 2: Solutions (if auto_solutions requested)
+        # Phase 2: Solutions (if auto_solutions requested) — uses lean context without re-sending PDF images/style samples or search tools
         s_sanitized = ""
+        p2_tools = [types.Tool(code_execution=types.ToolCodeExecution())] if subject == "Maths" else []
         if auto_solutions:
             if _stopped():
                 return _cancelled_result()
             _notify("🧠 Calculating deep step-by-step mathematical solutions...")
-            p2_payload = ai_payload + [
+            p2_payload = [
+                solutions_context_prompt,
                 out,
                 "\n\nPHASE 2 INSTRUCTION: Excellent. Now, generate the comprehensive step-by-step fully worked solutions for these EXACT questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===.\n"
                 "MANDATORY DIAGRAMS IN WORKED SOLUTIONS: You MUST ALWAYS include visual diagrams (using Native TikZ or the Python Graph Engine) in the fully worked solutions whenever a diagram helps the student visualize, follow, or understand the working out (e.g. geometric proofs, vector triangles/addition, coordinate geometry sketches, integration regions/areas between curves, sign diagrams, normal distribution shading, or 3D angles). Do NOT rely purely on text and algebra when a visual sketch aids understanding.\n"
@@ -2551,20 +2702,16 @@ When instructed, your final combined output must follow this template structure 
             s_out = None
             for s_model in models_to_try:
                 cur_max_tok = MAX_OUTPUT_TOKENS
-                tool_candidates = [[], active_tools] if (total_q >= 30 or not active_tools) else [active_tools, []]
+                tool_candidates = [[], p2_tools] if (total_q >= 30 or not p2_tools) else [p2_tools, []]
                 for t_list in tool_candidates:
                     if _stopped():
                         return _cancelled_result()
                     try:
-                        cfg = types.GenerateContentConfig(
+                        cfg = _build_gen_config(
+                            s_model,
                             max_output_tokens=cur_max_tok,
-                            tools=t_list if t_list else None,
-                            safety_settings=[
-                                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                            ],
+                            tools=t_list,
+                            thinking_level=p2_thinking,
                         )
                         res2 = client.models.generate_content(model=s_model, contents=p2_payload, config=cfg)
                         if _stopped():
@@ -2575,9 +2722,11 @@ When instructed, your final combined output must follow this template structure 
                         if "LATEX_SOLUTIONS_END" not in raw_s:
                             raw_s += "\n===LATEX_SOLUTIONS_END==="
                         s_out = raw_s.replace("```latex", "").replace("```", "")
-                        if res2.usage_metadata:
-                            in_tok += getattr(res2.usage_metadata, "prompt_token_count", 0)
-                            out_tok += getattr(res2.usage_metadata, "candidates_token_count", 0)
+                        s_in, s_out_t, s_th, s_ca = _extract_usage_tokens(res2)
+                        in_tok += s_in
+                        out_tok += s_out_t
+                        thought_tok += s_th
+                        cached_tok += s_ca
                         break
                     except Exception:
                         if _stopped():
@@ -2604,11 +2753,10 @@ When instructed, your final combined output must follow this template structure 
         if _stopped():
             return _cancelled_result()
 
-        # Pricing: Gemini 3.8 Flash ($0.75 / 1M in, $3.75 / 1M out) + Google Search ($0.014) + DeepSeek-R1 Auditor ($0.55 in, $2.19 out)
-        in_cost = (in_tok / 1_000_000) * 0.75
-        out_cost = (out_tok / 1_000_000) * 3.75
-        search_cost = 0.014 if used_search else 0.00
-        gemini_cost = round(in_cost + out_cost + search_cost, 5)
+        effective_model = model_used or models_to_try[0]
+        gemini_cost = _compute_gemini_cost(
+            in_tok, out_tok, cached_tok=cached_tok, used_search=used_search, model_name=effective_model
+        )
         ds_usage = audit_res or {}
         ds_cost = round(float(ds_usage["ds_cost"]), 5) if (
             ds_usage.get("status") in ("APPROVED", "REVISION_NEEDED")
@@ -2644,15 +2792,18 @@ When instructed, your final combined output must follow this template structure 
             "meta_xh": num_xh,
             "meta_extra_instructions": extra_instructions.strip() if extra_instructions else "",
             "deepseek_audit": audit_res,
-            "meta_model_used": model_used or "gemini-3.8-flash",
+            "meta_model_used": effective_model,
             "meta_input_tokens": in_tok,
             "meta_output_tokens": out_tok,
+            "meta_thought_tokens": thought_tok,
+            "meta_cached_tokens": cached_tok,
+            "meta_efficiency_mode": efficiency_mode,
             "meta_total_cost": total_cost,
             "meta_gemini_cost": gemini_cost,
             "meta_ds_cost": ds_cost,
             "used_search": used_search,
             "phase_1_raw": out,
-            "saved_ai_payload": ai_payload,
+            "saved_ai_payload": [solutions_context_prompt],
             "created_by": created_by,
             "computer_name": params.get("computer_name") or get_effective_computer_name(),
         }
@@ -2800,6 +2951,9 @@ def _load_job_into_session_state(res: dict):
         "meta_model_used": res.get("meta_model_used"),
         "meta_input_tokens": res.get("meta_input_tokens", 0),
         "meta_output_tokens": res.get("meta_output_tokens", 0),
+        "meta_thought_tokens": res.get("meta_thought_tokens", 0),
+        "meta_cached_tokens": res.get("meta_cached_tokens", 0),
+        "meta_efficiency_mode": res.get("meta_efficiency_mode", "Balanced (Save Credits)"),
         "meta_total_cost": res.get("meta_total_cost", 0.0),
         "meta_gemini_cost": res.get("meta_gemini_cost", 0.0),
         "meta_ds_cost": res.get("meta_ds_cost"),
@@ -3843,8 +3997,24 @@ with st.sidebar:
     app_mode = st.radio("App Mode", app_modes, index=_default_idx, key="main_app_mode")
     st.markdown("---")
     use_deepseek_auditor = False
+    efficiency_mode = "Balanced (Save Credits)"
     if app_mode == "✨ Generator":
         st.header("⚙️ Advanced Settings")
+        efficiency_mode = st.selectbox(
+            "⚡ AI Cost & Speed Mode",
+            [
+                "Balanced (Save Credits)",
+                "Ultra-Low Cost (Flash-Lite)",
+                "Maximum Reasoning",
+            ],
+            index=0,
+            key="efficiency_mode_select",
+            help=(
+                "• Balanced: Uses Gemini 3.8 Flash with smart thinking caps and lean solution passes.\n"
+                "• Ultra-Low Cost: Uses Gemini 3.5 Flash-Lite ($0.30/1M in, $2.50/1M out) for maximum savings.\n"
+                "• Maximum Reasoning: Uses deeper thinking on complex HSC/Extension questions."
+            ),
+        )
         use_deepseek_auditor = st.checkbox(
             "🛡️ DeepSeek-R1 Quality Auditor",
             value=True,
@@ -4228,37 +4398,21 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
             "- Do NOT use \\tag inside $$ ... $$; use \\qquad (1) if numbering equations.\n"
         )
 
-        gen_config = types.GenerateContentConfig(
-            max_output_tokens=MAX_OUTPUT_TOKENS,
-            tools=[types.Tool(code_execution=types.ToolCodeExecution())],
-            safety_settings=[
-                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-            ],
-        )
-
-        models_to_try = [
-            "gemini-3.8-flash",
-            "gemini-3.6-flash",
-        ]
+        models_to_try = _get_models_for_mode(st.session_state.get("efficiency_mode_select", "Balanced (Save Credits)"))
         s_out = None
         q_count = int(exam.get("total_questions") or 0)
+        is_maths_lib = (exam.get("subject") or "Maths") == "Maths"
+        lib_tools = [types.Tool(code_execution=types.ToolCodeExecution())] if is_maths_lib else []
         for model_name in models_to_try:
             cur_max = MAX_OUTPUT_TOKENS
-            tool_candidates = [[], [types.Tool(code_execution=types.ToolCodeExecution())]] if q_count >= 30 else [[types.Tool(code_execution=types.ToolCodeExecution())], []]
+            tool_candidates = [[], lib_tools] if (q_count >= 30 or not lib_tools) else [lib_tools, []]
             for t_list in tool_candidates:
                 try:
-                    cfg = types.GenerateContentConfig(
+                    cfg = _build_gen_config(
+                        model_name,
                         max_output_tokens=cur_max,
-                        tools=t_list if t_list else None,
-                        safety_settings=[
-                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                        ],
+                        tools=t_list,
+                        thinking_level="low" if (not is_maths_lib or "Lite" in st.session_state.get("efficiency_mode_select", "")) else "medium",
                     )
                     st.toast(f"🧠 {model_name}: Solving equations...")
                     res = client.models.generate_content(model=model_name, contents=[sol_prompt], config=cfg)
@@ -4923,7 +5077,8 @@ _SS_KEYS = (
     "questions_text", "answers_text", "solutions_text", "pdf_bytes", "tex_bytes", "word_bytes",
     "word_skip_reason", "compiler_log", "meta_topic", "meta_subject", "meta_year", "meta_diff",
     "meta_n", "meta_set", "cloud_saved", "display_topic", "meta_mc", "meta_easy", "meta_med",
-    "meta_hard", "meta_xh", "meta_input_tokens", "meta_output_tokens", "meta_model_used",
+    "meta_hard", "meta_xh", "meta_input_tokens", "meta_output_tokens", "meta_thought_tokens",
+    "meta_cached_tokens", "meta_efficiency_mode", "meta_model_used",
     "meta_total_cost", "meta_gemini_cost", "meta_ds_cost", "meta_extra_instructions", "used_search", "phase_1_raw", "saved_ai_payload", "work_dir",
     "saved_exam_id", "saved_has_solutions", "deepseek_audit",
 )
@@ -5057,6 +5212,7 @@ if generate_btn:
             "exemplar_questions": exemplar_questions,
             "uploaded_files_data": uploaded_files_data,
             "use_live_search": (subject in ["Business Studies", "Legal Studies", "Science"] and use_live_search),
+            "efficiency_mode": efficiency_mode,
             "created_by": st.session_state.get("user_display_name", "Teacher"),
             "computer_name": get_effective_computer_name(),
         }
@@ -5153,13 +5309,13 @@ if st.session_state.questions_text:
 
     in_tok = st.session_state.meta_input_tokens or 0
     out_tok = st.session_state.meta_output_tokens or 0
-    model_used = st.session_state.meta_model_used or "Unknown"
+    thought_tok = st.session_state.get("meta_thought_tokens") or 0
+    cached_tok = st.session_state.get("meta_cached_tokens") or 0
+    model_used = st.session_state.meta_model_used or "gemini-3.8-flash"
 
-    # Pricing: Gemini 3.8 Flash ($0.75 / 1M in, $3.75 / 1M out) + Google Search ($0.014) + DeepSeek-R1 Auditor ($0.55 in, $2.19 out)
-    in_cost = (in_tok / 1_000_000) * 0.75
-    out_cost = (out_tok / 1_000_000) * 3.75
-    search_cost = 0.014 if st.session_state.used_search else 0.00
-    gemini_cost = round(in_cost + out_cost + search_cost, 5)
+    gemini_cost = _compute_gemini_cost(
+        in_tok, out_tok, cached_tok=cached_tok, used_search=bool(st.session_state.used_search), model_name=model_used
+    )
     ds_cost = st.session_state.get("meta_ds_cost")
     total_cost = round(gemini_cost + (ds_cost or 0.0), 5)
     st.session_state["meta_gemini_cost"] = gemini_cost
@@ -5169,8 +5325,10 @@ if st.session_state.questions_text:
         search_badge = " &nbsp;&nbsp;|&nbsp;&nbsp; 🌍 *Live Web Search*" if st.session_state.used_search else ""
         audit_status = (st.session_state.get("deepseek_audit") or {}).get("status")
         split_info = f" (🤖 Gemini: ${gemini_cost:.4f} &nbsp;|&nbsp; 🛡️ DeepSeek Auditor: {deepseek_cost_label(ds_cost, audit_status)})"
-        st.caption(f"**💸 Generation Cost:** ${total_cost:.5f}{split_info} &nbsp;&nbsp;|&nbsp;&nbsp; **Engine:** `{model_used}` &nbsp;&nbsp;|&nbsp;&nbsp; **Tokens:** {in_tok:,} In / {out_tok:,} Out{search_badge}")
-        st.caption("ℹ️ Reflects official Gemini 3.8 Flash rates ($0.75/1M in, $3.75/1M out) + DeepSeek-R1 auditor rates ($0.55/1M in, $2.19/1M out).")
+        th_info = f" incl. {thought_tok:,} thinking" if thought_tok else ""
+        in_rate, _, out_rate = GEMINI_MODEL_PRICING.get(model_used.lower(), GEMINI_MODEL_PRICING["gemini-3.8-flash"])
+        st.caption(f"**💸 Generation Cost:** ${total_cost:.5f}{split_info} &nbsp;&nbsp;|&nbsp;&nbsp; **Engine:** `{model_used}` &nbsp;&nbsp;|&nbsp;&nbsp; **Tokens:** {in_tok:,} In / {out_tok:,} Out{th_info}{search_badge}")
+        st.caption(f"ℹ️ Reflects `{model_used}` rates (${in_rate:.2f}/1M in, ${out_rate:.2f}/1M out incl. thinking) + DeepSeek-R1 auditor rates ($0.55/1M in, $2.19/1M out).")
 
     if not st.session_state.solutions_text:
         st.info("💡 **Preview Ready!** The Worksheet and Answer Key have been drafted. You can download them now, or generate the step-by-step solutions to append to the document.")
@@ -5178,51 +5336,40 @@ if st.session_state.questions_text:
             with st.spinner("🤖 Calculating deep step-by-step mathematical solutions..."):
                 try:
                     client = _get_genai_client()
+                    is_maths_sol = (st.session_state.meta_subject or "Maths") == "Maths"
+                    p2_tools = [types.Tool(code_execution=types.ToolCodeExecution())] if is_maths_sol else []
+                    eff_mode = st.session_state.get("meta_efficiency_mode") or st.session_state.get("efficiency_mode_select") or "Balanced (Save Credits)"
+                    has_hard_sol = ((st.session_state.meta_hard or 0) + (st.session_state.meta_xh or 0) + (st.session_state.meta_med or 0)) > 0
+                    if "Maximum" in eff_mode:
+                        sol_thinking = "medium"
+                    elif "Lite" in eff_mode:
+                        sol_thinking = "low"
+                    else:
+                        sol_thinking = "medium" if (is_maths_sol and has_hard_sol) else "low"
 
-                    active_tools = [types.Tool(code_execution=types.ToolCodeExecution())]
-                    if st.session_state.used_search:
-                        active_tools.append(types.Tool(google_search=types.GoogleSearch()))
-
-                    gen_config = types.GenerateContentConfig(
-                        max_output_tokens=MAX_OUTPUT_TOKENS,
-                        tools=active_tools,
-                        safety_settings=[
-                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                        ],
-                    )
-
-                    p2_payload = st.session_state.saved_ai_payload + [
+                    p2_payload = (st.session_state.saved_ai_payload or []) + [
                         st.session_state.phase_1_raw,
                         "\n\nPHASE 2 INSTRUCTION: Excellent. Now, generate the comprehensive step-by-step fully worked solutions for these EXACT questions. You must place your entire output between the tags ===LATEX_SOLUTIONS_START=== and ===LATEX_SOLUTIONS_END===.\n"
                         "MANDATORY DIAGRAMS IN WORKED SOLUTIONS: You MUST ALWAYS include visual diagrams (using Native TikZ or the Python Graph Engine) in the fully worked solutions whenever a diagram helps the student visualize, follow, or understand the working out (e.g. geometric proofs, vector triangles/addition, coordinate geometry sketches, integration regions/areas between curves, sign diagrams, normal distribution shading, or 3D angles). Do NOT rely purely on text and algebra when a visual sketch aids understanding.\n"
                         "Group trivial algebra. Show all key mathematical steps and justifications. Never use \\tag inside $$ ... $$ or \\[ ... \\]; use \\qquad (1) if numbering equations.",
                     ]
 
-                    models_to_try = [
-                        "gemini-3.8-flash",
-                        "gemini-3.6-flash",
-                    ]
+                    models_to_try = _get_models_for_mode(eff_mode)
                     s_out = None
                     last_error = None
+                    q_n = int(st.session_state.meta_n or total_q or 0)
                     for model_name in models_to_try:
                         cur_max_tok = MAX_OUTPUT_TOKENS
                         # For large batches (>=30 questions), prefer direct LLM generation first to prevent code execution sandbox timeouts
-                        tool_candidates = [[], active_tools] if (total_q >= 30 or not active_tools) else [active_tools, []]
+                        tool_candidates = [[], p2_tools] if (q_n >= 30 or not p2_tools) else [p2_tools, []]
 
                         for t_list in tool_candidates:
                             try:
-                                cfg = types.GenerateContentConfig(
+                                cfg = _build_gen_config(
+                                    model_name,
                                     max_output_tokens=cur_max_tok,
-                                    tools=t_list if t_list else None,
-                                    safety_settings=[
-                                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH),
-                                    ],
+                                    tools=t_list,
+                                    thinking_level=sol_thinking,
                                 )
                                 st.toast(f"🧠 {model_name}: Solving equations...")
                                 res2 = client.models.generate_content(model=model_name, contents=p2_payload, config=cfg)
@@ -5236,9 +5383,11 @@ if st.session_state.questions_text:
 
                                 s_out = raw_s.replace("```latex", "").replace("```", "")
 
-                                if res2.usage_metadata:
-                                    st.session_state.meta_input_tokens += getattr(res2.usage_metadata, "prompt_token_count", 0)
-                                    st.session_state.meta_output_tokens += getattr(res2.usage_metadata, "candidates_token_count", 0)
+                                s_in, s_out_t, s_th, s_ca = _extract_usage_tokens(res2)
+                                st.session_state.meta_input_tokens = (st.session_state.meta_input_tokens or 0) + s_in
+                                st.session_state.meta_output_tokens = (st.session_state.meta_output_tokens or 0) + s_out_t
+                                st.session_state.meta_thought_tokens = (st.session_state.get("meta_thought_tokens") or 0) + s_th
+                                st.session_state.meta_cached_tokens = (st.session_state.get("meta_cached_tokens") or 0) + s_ca
                                 break
                             except Exception as e:
                                 last_error = e
