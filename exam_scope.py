@@ -50,7 +50,9 @@ def build_exam_scope(requested_topics, custom_topic="", custom_subtopic="", has_
     if custom_subtopic.strip():
         lines.append(f"- Teacher-requested custom subtopic: {custom_subtopic.strip()}.")
     if has_upload:
-        lines.append("- Uploaded assessment scope may narrow these selections. If no topic was selected or typed, use only the topics explicitly specified in the uploaded document.")
+        lines.append(
+            "- Uploaded assessment scope strictly narrows and caps the allowed content. Match BOTH the named topics/chapters AND any year level or syllabus outcome codes listed in the document (e.g., Year 11 Probability/Statistics outcomes do NOT include Year 12 Discrete Random Variables E(X)/Var(X) or Normal Distribution; basic Integration does NOT include Exponential, Reciprocal/Logarithmic, or Trigonometric integration unless those functions/chapters are explicitly listed). If no topic was selected or typed, use ONLY the topics explicitly specified in the uploaded document."
+        )
 
     # Cambridge's Year 12 Advanced text puts these integration techniques in
     # later chapters. Selecting Chapter 4 alone must not silently include them.

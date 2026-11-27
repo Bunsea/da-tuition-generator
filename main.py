@@ -1883,6 +1883,7 @@ def audit_exam_with_deepseek(
     total_q: int,
     syllabus_rules: str,
     api_key: str = "",
+    uploaded_doc_text: str = "",
 ) -> dict:
     """Invokes DeepSeek-R1 (deepseek-reasoner) to audit drafted questions for mathematical correctness,
     solvability, and strict post-2019 NESA syllabus boundaries.
@@ -1929,9 +1930,11 @@ def audit_exam_with_deepseek(
         "     * Year 11 vs Year 12 boundaries: Discrete random variables are Year 12 Advanced (banned in Year 11). Basic network concepts are Year 11 Standard review; Year 12 Standard includes critical path analysis and network flow.\n"
         "3. DIAGRAM INTEGRITY:\n"
         "   - If any question refers to a figure, geometric shape, or diagram (e.g. 'In the diagram below', 'The figure shows'), verify that a valid rendered diagram (TikZ or Python graph) is present.\n"
-        "4. QUESTION SPECIFICATIONS:\n"
+        "4. QUESTION SPECIFICATIONS & UPLOADED NOTIFICATION COMPLIANCE (CRITICAL):\n"
         "   - Verify that the draft aligns with the intended topic, level, and question count.\n"
-        "   - Inspect the full solution to every question for content from a chapter or subtopic the teacher did not select, even when that content is within the NSW syllabus. Mark REVISION_NEEDED for any such crossover and give a replacement that stays within the requested scope.\n\n"
+        "   - Inspect the full solution to every question for content from a chapter, outcome, or subtopic that was NOT requested (or NOT listed in the uploaded Assessment Notification below, when provided), even when that content is within the NSW syllabus.\n"
+        "   - Watch closely for common notification scope leaks: (a) Discrete Random Variables / probability distribution tables P(X=x) / E(X) / Var(X) when the notification only lists Year 11 Probability or Data & Summary Statistics (e.g. MAV-11-10, box plots, histograms, conditional probability), (b) Continuous Random Variables / Normal Distribution unless explicitly listed, and (c) Exponential (e^x), Reciprocal/Log (1/x, ln x), or Trig (sin/cos) integration when the notification only lists introductory Integration (polynomials/areas) without mentioning exponential/log/trig calculus.\n"
+        "   - Mark REVISION_NEEDED for ANY such unlisted-topic question and give an exact replacement drawn strictly from the listed topics/chapters in CORRECTION_PROMPT.\n\n"
         "OUTPUT FORMAT (STRICT DELIMITERS):\n"
         "===AUDIT_STATUS===\n"
         "[APPROVED or REVISION_NEEDED]\n"
@@ -1943,11 +1946,19 @@ def audit_exam_with_deepseek(
         "[If REVISION_NEEDED: Give precise, actionable instructions to the drafting AI on which questions to replace or fix and how. If APPROVED, write NONE]\n"
     )
 
+    uploaded_doc_block = ""
+    if uploaded_doc_text and uploaded_doc_text.strip():
+        uploaded_doc_block = (
+            f"UPLOADED ASSESSMENT NOTIFICATION / REFERENCE DOCUMENT TEXT (STRICT SCOPE SOURCE):\n"
+            f"{uploaded_doc_text.strip()[:10000]}\n\n"
+        )
+
     user_payload = (
         f"AUDIT SPECIFICATION:\n"
         f"- Target Course: {year_group}{level_str} in {subject}\n"
         f"- Focus Topic: {clean_topic}\n"
         f"- Expected Total Questions: {total_q}\n\n"
+        f"{uploaded_doc_block}"
         f"COURSE-SPECIFIC SYLLABUS CONSTRAINTS:\n{syllabus_rules}\n\n"
         f"DRAFTED EXAM CONTENT TO AUDIT:\n{draft_content}\n"
     )
@@ -2271,7 +2282,9 @@ def generate_exam_worker(params: dict, progress_cb=None, cancel_event=None) -> d
                 elif policy_level == "Advanced":
                     yr_ban = (
                         " YEAR 12 ADVANCED BOUNDARIES: "
-                        "DISCRETE PROBABILITY DISTRIBUTIONS IS INCLUDED IN YEAR 12 ADVANCED: Discrete Probability Distributions, discrete random variables, probability mass functions P(X = x), probability distribution tables, expected value E(X) = mu, and variance Var(X) = sigma^2 are explicitly part of Year 12 Maths Advanced (alongside Continuous Probability Distributions and Normal Distribution)."
+                        "Discrete Probability Distributions (discrete random variables, probability mass functions P(X = x), E(X), Var(X)) and Continuous Probability Distributions / Normal Distribution are part of the Year 12 Maths Advanced syllabus, "
+                        "BUT ONLY include them when explicitly selected by the teacher or explicitly named in an uploaded assessment notification. "
+                        "NEVER inject Discrete or Continuous Random Variables just because Year 11 Probability, Conditional Probability, or Data & Summary Statistics (e.g. box plots, histograms, mean/SD, MAV-11-10) is requested or listed."
                     )
                 elif policy_level in ["Extension", "Extension 1"]:
                     yr_ban = (
@@ -2441,6 +2454,7 @@ When instructed, your final combined output must follow this template structure 
         if exemplar_questions.strip():
             ai_payload.append(f"\n\n[CLONE EXEMPLARS - TEXT INPUT]:\n{exemplar_questions}")
 
+        uploaded_doc_texts = []
         if uploaded_files_data:
             from pypdf import PdfReader
             for file_info in uploaded_files_data:
@@ -2480,6 +2494,7 @@ When instructed, your final combined output must follow this template structure 
                         reader = PdfReader(io.BytesIO(doc_bytes))
                         pdf_text = "\n".join([page.extract_text() or "" for page in reader.pages]).strip()
                         if pdf_text:
+                            uploaded_doc_texts.append(f"[{fname}]:\n{pdf_text}")
                             ai_payload.append(f"\n\n[EXTRACTED PDF TEXT FROM {fname}]:\n{pdf_text}")
                     except Exception:
                         pass
@@ -2491,13 +2506,17 @@ When instructed, your final combined output must follow this template structure 
                 "\n\n[ATTACHED DOCUMENTS INSTRUCTION - HIGHEST PRIORITY]:\n"
                 "Carefully analyze ALL attached documents/pages:\n"
                 "1. IF THE ATTACHMENTS ARE AN ASSESSMENT NOTIFICATION, EXAM NOTICE, OR TOPIC LIST:\n"
-                "   - Extract EVERY topic, sub-topic, and skill specified in the notification.\n"
-                "   - Your generated exam MUST STRICTLY AND EXCLUSIVELY focus on the topics, sub-topics, and syllabus outcomes listed across all uploaded pages.\n"
-                "   - DO NOT generate questions on unlisted topics.\n"
+                "   - Extract EVERY topic, sub-topic, textbook chapter reference, year-level reference, and syllabus outcome code (e.g. MA-11-09, MAV-11-10, MAV-12-04) specified in the notification.\n"
+                "   - Your generated exam MUST STRICTLY AND EXCLUSIVELY test ONLY the topics, sub-topics, chapters, and outcomes explicitly listed in the notification. DO NOT generate questions on ANY unlisted topic or later chapter!\n"
+                "   - STRICT NOTIFICATION BOUNDARY RULES (DO NOT OVER-EXTRAPOLATE):\n"
+                "     * Respect the Year & Outcome codes on the notification: e.g. if it lists Year 11 'Probability' (Ch 12 / MA-11-09) or 'Data & Probability' / Summary Statistics (Ch 13 / MAV-11-10), test ONLY those Year 11 skills (sample spaces, Venn/tree diagrams, conditional probability, box plots, IQR/outliers, mean/SD, frequency histograms). DO NOT generate Year 12 Discrete Random Variables / probability distribution tables P(X=x) / E(X) / Var(X) or Continuous Random Variables / Normal Distribution unless explicitly named in the notification!\n"
+                "     * Respect Chapter boundaries: e.g. if the notification lists introductory 'Integration' (e.g. Y12 Ch 3) WITHOUT mentioning Exponential, Logarithmic, or Trigonometric calculus/integration chapters, do NOT include integrals of e^x, 1/x / ln x, or sin/cos functions!\n"
+                "   - Before writing any question, verify that BOTH the question AND its full solution stay strictly inside the notification's listed chapters and outcomes.\n"
                 "   - Extract the School Name and Assessment Title for school notices in ===FILENAME_START=== tags. For syllabus/topic documents, extract ONLY the concise Topic Name (e.g. Sequences_and_Series) without prefixing NESA, year, or subject in ===FILENAME_START=== tags.\n"
                 "2. IF THE ATTACHMENTS CONTAIN SAMPLE / EXEMPLAR QUESTIONS OR A WORKSHEET:\n"
                 "   - Reverse-engineer the mechanics, phrasing, difficulty, and diagram styles of those exact questions, and generate original parallel practice questions testing the same competency."
             )
+        uploaded_doc_text = "\n\n".join(uploaded_doc_texts).strip()
 
         live_search_subjects = ["Business Studies", "Legal Studies", "Science"]
         is_stem = subject in ("Maths", "Science")
@@ -2636,6 +2655,7 @@ When instructed, your final combined output must follow this template structure 
                     total_q=total_q,
                     syllabus_rules=syllabus_ban,
                     api_key=active_ds_key,
+                    uploaded_doc_text=uploaded_doc_text,
                 )
                 if _stopped():
                     return _cancelled_result()
@@ -2647,18 +2667,23 @@ When instructed, your final combined output must follow this template structure 
                         f"AUDITOR'S SPECIFIC CORRECTION INSTRUCTIONS:\n{audit_res.get('correction_prompt')}\n\n"
                         "CRITICAL TASK:\n"
                         "Regenerate the complete exam, applying the auditor's corrections.\n"
-                        "Keep all already-correct questions untouched, and strictly replace or fix the flagged questions to ensure 100% mathematical accuracy, strict syllabus compliance, and strict compliance with the teacher's requested topics and subtopics.\n"
+                        "Keep all already-correct questions untouched, and strictly replace or fix the flagged questions to ensure 100% mathematical accuracy, strict syllabus compliance, and strict compliance with the teacher's requested topics, subtopics, and any uploaded assessment notification.\n"
                         f"REQUESTED SCOPE AND SYLLABUS RULES:\n{syllabus_ban}\n"
                         "Output using the exact same format tags:\n"
                         "===FILENAME_START=== ... ===FILENAME_END===\n"
                         "===LATEX_CONTENT_START=== ... ===LATEX_CONTENT_END===\n"
                         "===LATEX_ANSWERS_START=== ... ===LATEX_ANSWERS_END===\n"
                     )
-                    refine_contents = [
-                        solutions_context_prompt,
+                    refine_contents = [solutions_context_prompt]
+                    if uploaded_doc_text:
+                        refine_contents.append(
+                            "\n\nUPLOADED ASSESSMENT NOTIFICATION / REFERENCE DOCUMENT TEXT (STRICT SCOPE):\n"
+                            + uploaded_doc_text[:8000]
+                        )
+                    refine_contents.extend([
                         "\n\nCURRENT EXAM DRAFT TO FIX:\n" + out,
                         "\n\n" + refine_prompt,
-                    ]
+                    ])
                     refine_models = _get_models_for_mode(efficiency_mode)
                     for r_model in refine_models:
                         if _stopped():
