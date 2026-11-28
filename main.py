@@ -1525,10 +1525,18 @@ _DEFAULT_SAFETY_SETTINGS = [
 ]
 
 
-def _get_models_for_mode(efficiency_mode: str = "Balanced (Save Credits)") -> list[str]:
-    """Return ordered Gemini fallback chain for the selected efficiency mode."""
-    if "Lite" in (efficiency_mode or ""):
-        return ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.6-flash"]
+def _get_models_for_exam(subject: str = "Maths", year_group=None) -> list[str]:
+    """Automatically choose Flash-Lite for Maths Years 7-10 and 3.8 Flash for Years 11-12 or non-Maths."""
+    if (subject or "").strip().lower() == "maths":
+        if isinstance(year_group, (list, tuple, set)):
+            yr_text = ", ".join(str(y) for y in year_group)
+        else:
+            yr_text = str(year_group or "")
+        yr_nums = [int(n) for n in re.findall(r"\b(?:Year|Yr)\s*(\d+)\b", yr_text, re.IGNORECASE)]
+        if not yr_nums:
+            yr_nums = [int(n) for n in re.findall(r"\b(7|8|9|10|11|12)\b", yr_text)]
+        if yr_nums and all(n <= 10 for n in yr_nums):
+            return ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.6-flash"]
     return ["gemini-3.8-flash", "gemini-3.6-flash"]
 
 
@@ -2390,7 +2398,6 @@ def generate_exam_worker(params: dict, progress_cb=None, cancel_event=None) -> d
         auto_solutions = params.get("auto_solutions", False)
         use_deepseek_auditor = params.get("use_deepseek_auditor", False)
         deepseek_api_key = params.get("deepseek_api_key", "")
-        efficiency_mode = params.get("efficiency_mode", "Balanced (Save Credits)")
 
         has_upload = bool(uploaded_files_data)
         has_mc = num_mc > 0
@@ -2745,22 +2752,19 @@ When instructed, your final combined output must follow this template structure 
         if used_search:
             active_tools.append(types.Tool(google_search=types.GoogleSearch()))
 
-        # Tune thinking depth by efficiency mode and problem complexity to avoid excessive thinking-token spend
+        models_to_try = _get_models_for_exam(subject, year_group)
+        is_junior_lite = models_to_try[0] == "gemini-3.5-flash-lite"
+
+        # Tune thinking depth by problem complexity and model tier
         has_hard_items = (num_hard + num_xh) > 0
-        if "Maximum" in efficiency_mode:
-            p1_thinking = "high" if is_stem else "medium"
-            p2_thinking = "medium"
-            refine_thinking = "medium"
-        elif "Lite" in efficiency_mode:
-            p1_thinking = "low"
-            p2_thinking = "low"
+        if is_junior_lite:
+            p1_thinking = "medium" if (has_hard_items or has_upload) else "low"
+            p2_thinking = "medium" if has_hard_items else "low"
             refine_thinking = "low"
         else:
             p1_thinking = "medium" if (is_stem and (has_hard_items or has_upload)) else "low"
             p2_thinking = "medium" if (is_stem and (has_hard_items or num_med > 0)) else "low"
             refine_thinking = "low"
-
-        models_to_try = _get_models_for_mode(efficiency_mode)
         out = None
         last_error = None
         model_used = None
@@ -2867,7 +2871,7 @@ When instructed, your final combined output must follow this template structure 
             if active_ds_key:
                 if not is_stem:
                     ds_thinking_type, ds_effort = "disabled", "low"
-                elif "Maximum" in efficiency_mode or has_hard_items:
+                elif has_hard_items:
                     ds_thinking_type, ds_effort = "enabled", "high"
                 else:
                     ds_thinking_type, ds_effort = "enabled", "low"
@@ -2901,7 +2905,7 @@ When instructed, your final combined output must follow this template structure 
                     first_details = audit_res.get("details") or ""
                     first_corr = audit_res.get("correction_prompt") or ""
                     first_reasoning = audit_res.get("reasoning") or ""
-                    refine_models = _get_models_for_mode(efficiency_mode)
+                    refine_models = models_to_try
                     max_fix_rounds = 2
                     current_audit = audit_res
                     applied_any_fix = False
@@ -3109,7 +3113,6 @@ When instructed, your final combined output must follow this template structure 
             "meta_output_tokens": out_tok,
             "meta_thought_tokens": thought_tok,
             "meta_cached_tokens": cached_tok,
-            "meta_efficiency_mode": efficiency_mode,
             "meta_total_cost": total_cost,
             "meta_gemini_cost": gemini_cost,
             "meta_ds_cost": ds_cost,
@@ -3265,7 +3268,6 @@ def _load_job_into_session_state(res: dict):
         "meta_output_tokens": res.get("meta_output_tokens", 0),
         "meta_thought_tokens": res.get("meta_thought_tokens", 0),
         "meta_cached_tokens": res.get("meta_cached_tokens", 0),
-        "meta_efficiency_mode": res.get("meta_efficiency_mode", "Balanced (Save Credits)"),
         "meta_total_cost": res.get("meta_total_cost", 0.0),
         "meta_gemini_cost": res.get("meta_gemini_cost", 0.0),
         "meta_ds_cost": res.get("meta_ds_cost"),
@@ -4324,24 +4326,8 @@ with st.sidebar:
     app_mode = st.radio("App Mode", app_modes, index=_default_idx, key="main_app_mode")
     st.markdown("---")
     use_deepseek_auditor = False
-    efficiency_mode = "Balanced (Save Credits)"
     if app_mode == "✨ Generator":
         st.header("⚙️ Advanced Settings")
-        efficiency_mode = st.selectbox(
-            "⚡ AI Cost & Speed Mode",
-            [
-                "Balanced (Save Credits)",
-                "Ultra-Low Cost (Flash-Lite)",
-                "Maximum Reasoning",
-            ],
-            index=0,
-            key="efficiency_mode_select",
-            help=(
-                "• Balanced: Uses Gemini 3.8 Flash with smart thinking caps and lean solution passes.\n"
-                "• Ultra-Low Cost: Uses Gemini 3.5 Flash-Lite ($0.30/1M in, $2.50/1M out) for maximum savings.\n"
-                "• Maximum Reasoning: Uses deeper thinking on complex HSC/Extension questions."
-            ),
-        )
         use_deepseek_auditor = st.checkbox(
             "🛡️ DeepSeek Quality Auditor",
             value=True,
@@ -4721,10 +4707,12 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
             + _PHASE2_SOLUTIONS_INSTRUCTION
         )
 
-        models_to_try = _get_models_for_mode(st.session_state.get("efficiency_mode_select", "Balanced (Save Credits)"))
+        lib_subject = exam.get("subject") or "Maths"
+        lib_year = exam.get("year_group") or ""
+        models_to_try = _get_models_for_exam(lib_subject, lib_year)
         s_out = None
         q_count = int(exam.get("total_questions") or 0)
-        is_maths_lib = (exam.get("subject") or "Maths") == "Maths"
+        is_maths_lib = lib_subject == "Maths"
         lib_tools = [types.Tool(code_execution=types.ToolCodeExecution())] if is_maths_lib else []
         for model_name in models_to_try:
             cur_max = MAX_OUTPUT_TOKENS
@@ -4735,7 +4723,7 @@ def _generate_solutions_for_library_exam(exam: dict) -> tuple[bool, str]:
                         model_name,
                         max_output_tokens=cur_max,
                         tools=t_list,
-                        thinking_level="low" if (not is_maths_lib or "Lite" in st.session_state.get("efficiency_mode_select", "")) else "medium",
+                        thinking_level="low" if (not is_maths_lib or model_name == "gemini-3.5-flash-lite") else "medium",
                     )
                     st.toast(f"🧠 {model_name}: Solving equations...")
                     res = client.models.generate_content(model=model_name, contents=[sol_prompt], config=cfg)
@@ -5402,7 +5390,7 @@ _SS_KEYS = (
     "word_skip_reason", "compiler_log", "meta_topic", "meta_subject", "meta_year", "meta_diff",
     "meta_n", "meta_set", "cloud_saved", "display_topic", "meta_mc", "meta_easy", "meta_med",
     "meta_hard", "meta_xh", "meta_input_tokens", "meta_output_tokens", "meta_thought_tokens",
-    "meta_cached_tokens", "meta_efficiency_mode", "meta_model_used",
+    "meta_cached_tokens", "meta_model_used",
     "meta_total_cost", "meta_gemini_cost", "meta_ds_cost", "meta_extra_instructions", "used_search", "phase_1_raw", "saved_ai_payload", "work_dir",
     "saved_exam_id", "saved_has_solutions", "deepseek_audit",
 )
@@ -5536,7 +5524,6 @@ if generate_btn:
             "exemplar_questions": exemplar_questions,
             "uploaded_files_data": uploaded_files_data,
             "use_live_search": (subject in ["Business Studies", "Legal Studies", "Science"] and use_live_search),
-            "efficiency_mode": efficiency_mode,
             "created_by": st.session_state.get("user_display_name", "Teacher"),
             "computer_name": get_effective_computer_name(),
         }
@@ -5677,23 +5664,18 @@ if st.session_state.questions_text:
             with st.spinner("🤖 Calculating deep step-by-step mathematical solutions..."):
                 try:
                     client = _get_genai_client()
-                    is_maths_sol = (st.session_state.meta_subject or "Maths") == "Maths"
+                    sol_subj = st.session_state.meta_subject or "Maths"
+                    sol_year = st.session_state.meta_year or ""
+                    is_maths_sol = sol_subj == "Maths"
                     p2_tools = [types.Tool(code_execution=types.ToolCodeExecution())] if is_maths_sol else []
-                    eff_mode = st.session_state.get("meta_efficiency_mode") or st.session_state.get("efficiency_mode_select") or "Balanced (Save Credits)"
+                    models_to_try = _get_models_for_exam(sol_subj, sol_year)
                     has_hard_sol = ((st.session_state.meta_hard or 0) + (st.session_state.meta_xh or 0) + (st.session_state.meta_med or 0)) > 0
-                    if "Maximum" in eff_mode:
-                        sol_thinking = "medium"
-                    elif "Lite" in eff_mode:
-                        sol_thinking = "low"
-                    else:
-                        sol_thinking = "medium" if (is_maths_sol and has_hard_sol) else "low"
+                    sol_thinking = "medium" if (is_maths_sol and has_hard_sol and models_to_try[0] != "gemini-3.5-flash-lite") else "low"
 
                     p2_payload = (st.session_state.saved_ai_payload or []) + [
                         st.session_state.phase_1_raw,
                         _PHASE2_SOLUTIONS_INSTRUCTION,
                     ]
-
-                    models_to_try = _get_models_for_mode(eff_mode)
                     s_out = None
                     last_error = None
                     q_n = int(st.session_state.meta_n or total_q or 0)
