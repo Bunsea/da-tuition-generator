@@ -2037,64 +2037,82 @@ def audit_exam_with_deepseek(
 
     ds_thinking = "disabled" if (thinking_type or "").lower() == "disabled" else "enabled"
     ds_effort = reasoning_effort if reasoning_effort in ("low", "high", "max") else "low"
+    ds_max_tokens = 24576 if ds_effort == "high" else 16384
     msgs = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_payload},
     ]
 
-    for candidate_model in ("deepseek-flash", "deepseek-reasoner"):
-        use_flash_params = candidate_model == "deepseek-flash"
-        extra_body = {"thinking": {"type": ds_thinking}}
-        if ds_thinking == "enabled":
-            extra_body["reasoning_effort"] = ds_effort
+    # Retry chain: primary deepseek-flash -> lighter/larger-budget deepseek-flash if truncated -> deepseek-reasoner fallback
+    attempt_specs = [("deepseek-flash", ds_thinking, ds_effort, ds_max_tokens)]
+    if ds_thinking == "enabled":
+        if ds_effort != "low":
+            attempt_specs.append(("deepseek-flash", "enabled", "low", 32768))
+        else:
+            attempt_specs.append(("deepseek-flash", "disabled", "low", 16384))
+    attempt_specs.append(("deepseek-reasoner", None, None, 24576))
+
+    for candidate_model, cur_thinking, cur_effort, cur_max_tok in attempt_specs:
+        use_flash_params = candidate_model == "deepseek-flash" and cur_thinking is not None
+        extra_body = {"thinking": {"type": cur_thinking}} if use_flash_params else {}
+        if use_flash_params and cur_thinking == "enabled":
+            extra_body["reasoning_effort"] = cur_effort
 
         # Strategy 1: OpenAI SDK if installed
-        used_sdk = False
+        sdk_responded = False
         if HAS_OPENAI:
             try:
                 client = OpenAI(api_key=key, base_url="https://api.deepseek.com")
                 sdk_kwargs = {
                     "model": candidate_model,
                     "messages": msgs,
-                    "max_tokens": 4096,
-                    "timeout": 60.0,
+                    "max_tokens": cur_max_tok,
+                    "timeout": 90.0,
                 }
                 if use_flash_params:
                     sdk_kwargs["extra_body"] = extra_body
                 response = client.chat.completions.create(**sdk_kwargs)
+                sdk_responded = True
+                finish_reason = None
                 if response.choices:
                     choice = response.choices[0]
+                    finish_reason = getattr(choice, "finish_reason", None)
                     raw_content = choice.message.content or ""
                     reasoning_content = getattr(choice.message, "reasoning_content", "") or ""
-                    used_sdk = bool(raw_content)
                 usage_obj = getattr(response, "usage", None)
                 if usage_obj:
-                    ds_in_tok = int(getattr(usage_obj, "prompt_tokens", 0) or 0)
-                    ds_out_tok = int(getattr(usage_obj, "completion_tokens", 0) or 0)
+                    ds_in_tok += int(getattr(usage_obj, "prompt_tokens", 0) or 0)
+                    ds_out_tok += int(getattr(usage_obj, "completion_tokens", 0) or 0)
                     hit_val = getattr(usage_obj, "prompt_cache_hit_tokens", None)
                     if hit_val is None and getattr(usage_obj, "prompt_tokens_details", None):
                         hit_val = getattr(usage_obj.prompt_tokens_details, "cached_tokens", 0)
-                    ds_cache_hit_tok = int(hit_val or 0)
+                    ds_cache_hit_tok += int(hit_val or 0)
                 if raw_content:
                     ds_model_used = candidate_model
                     break
+                last_err = ValueError(
+                    f"Empty content from {candidate_model} (finish_reason={finish_reason}, thinking={cur_thinking}/{cur_effort})"
+                )
             except Exception as e_sdk:
                 last_err = e_sdk
                 _log_error(f"OpenAI SDK DeepSeek Call Failed ({candidate_model}), falling back", e_sdk)
+                err_low = str(e_sdk).lower()
+                if "402" in err_low or "payment required" in err_low or "401" in err_low or "unauthorized" in err_low:
+                    break
 
-        # Strategy 2: Direct HTTP POST via urllib.request (zero external dependencies)
-        if not used_sdk or not raw_content:
+        # Strategy 2: Direct HTTP POST via urllib.request only when SDK is unavailable or threw a transport/SDK error
+        if not sdk_responded:
             try:
                 import urllib.request
                 data = {
                     "model": candidate_model,
                     "messages": msgs,
-                    "max_tokens": 4096,
+                    "max_tokens": cur_max_tok,
                 }
                 if use_flash_params:
-                    data["thinking"] = {"type": ds_thinking}
-                    if ds_thinking == "enabled":
-                        data["reasoning_effort"] = ds_effort
+                    data["thinking"] = {"type": cur_thinking}
+                    if cur_thinking == "enabled":
+                        data["reasoning_effort"] = cur_effort
                 req = urllib.request.Request(
                     "https://api.deepseek.com/chat/completions",
                     data=json.dumps(data).encode("utf-8"),
@@ -2103,23 +2121,29 @@ def audit_exam_with_deepseek(
                         "Authorization": f"Bearer {key}",
                     },
                 )
-                with urllib.request.urlopen(req, timeout=60) as resp:
+                with urllib.request.urlopen(req, timeout=90) as resp:
                     res_obj = json.loads(resp.read().decode("utf-8"))
+                    finish_reason = None
                     if res_obj.get("choices"):
-                        msg = res_obj["choices"][0].get("message", {})
+                        c0 = res_obj["choices"][0]
+                        finish_reason = c0.get("finish_reason")
+                        msg = c0.get("message", {})
                         raw_content = msg.get("content", "") or ""
                         reasoning_content = msg.get("reasoning_content", "") or ""
                     if res_obj.get("usage"):
                         u = res_obj["usage"]
-                        ds_in_tok = int(u.get("prompt_tokens", 0) or 0)
-                        ds_out_tok = int(u.get("completion_tokens", 0) or 0)
+                        ds_in_tok += int(u.get("prompt_tokens", 0) or 0)
+                        ds_out_tok += int(u.get("completion_tokens", 0) or 0)
                         hit_val = u.get("prompt_cache_hit_tokens")
                         if hit_val is None and isinstance(u.get("prompt_tokens_details"), dict):
                             hit_val = u["prompt_tokens_details"].get("cached_tokens", 0)
-                        ds_cache_hit_tok = int(hit_val or 0)
+                        ds_cache_hit_tok += int(hit_val or 0)
                 if raw_content:
                     ds_model_used = candidate_model
                     break
+                last_err = ValueError(
+                    f"Empty content from {candidate_model} (finish_reason={finish_reason}, thinking={cur_thinking}/{cur_effort})"
+                )
             except Exception as e_http:
                 last_err = e_http
                 _log_error(f"DeepSeek Auditor API Failure ({candidate_model})", e_http)
