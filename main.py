@@ -1610,6 +1610,56 @@ def _compute_gemini_cost(
     search_cost = 0.014 if used_search else 0.00
     return round(in_cost + out_cost + search_cost, 5)
 
+
+DEEPSEEK_MODEL_PRICING = {
+    # (off_peak_in_miss, off_peak_in_hit, off_peak_out, peak_in_miss, peak_in_hit, peak_out) USD per 1M tokens
+    "deepseek-flash": (0.15, 0.003, 0.60, 0.30, 0.006, 1.20),
+    "deepseek-v4-pro": (0.66, 0.022, 1.98, 1.32, 0.044, 3.96),
+    "deepseek-reasoner": (0.55, 0.14, 2.19, 0.55, 0.14, 2.19),
+}
+
+
+def _is_deepseek_peak_utc(now_utc: datetime | None = None) -> bool:
+    """Return True during DeepSeek peak pricing windows (01:00-04:00 & 06:00-10:00 UTC, Mon-Fri)."""
+    dt = now_utc or datetime.now(timezone.utc)
+    if dt.weekday() >= 5:  # Saturday/Sunday are off-peak
+        return False
+    return (1 <= dt.hour < 4) or (6 <= dt.hour < 10)
+
+
+def _compute_deepseek_cost(
+    in_tok: int,
+    out_tok: int,
+    cache_hit_tok: int = 0,
+    model_name: str = "deepseek-flash",
+    is_peak: bool | None = None,
+) -> float:
+    """Calculate DeepSeek API cost in USD accounting for peak/off-peak windows and cache hits."""
+    key = (model_name or "deepseek-flash").strip().lower()
+    rates = DEEPSEEK_MODEL_PRICING.get(key, DEEPSEEK_MODEL_PRICING["deepseek-flash"])
+    peak = _is_deepseek_peak_utc() if is_peak is None else bool(is_peak)
+    in_miss_r, in_hit_r, out_r = rates[3:6] if peak else rates[0:3]
+    eff_hit = min(max(0, int(cache_hit_tok or 0)), max(0, int(in_tok or 0)))
+    miss_tok = max(0, int(in_tok or 0) - eff_hit)
+    in_cost = (miss_tok / 1_000_000) * in_miss_r + (eff_hit / 1_000_000) * in_hit_r
+    out_cost = (max(0, int(out_tok or 0)) / 1_000_000) * out_r
+    return round(in_cost + out_cost, 6)
+
+
+def _normalize_exam_tags(raw_text: str) -> str:
+    """Ensure closing LATEX_*_END tags are balanced if Gemini omitted a trailing marker."""
+    if not raw_text:
+        return ""
+    text = raw_text.replace("```latex", "").replace("```", "")
+    if "LATEX_CONTENT_START" in text and "LATEX_CONTENT_END" not in text:
+        if "LATEX_ANSWERS_START" in text:
+            text = text.replace("===LATEX_ANSWERS_START===", "===LATEX_CONTENT_END===\n===LATEX_ANSWERS_START===")
+        else:
+            text += "\n===LATEX_CONTENT_END===\n===LATEX_ANSWERS_START===\n===LATEX_ANSWERS_END==="
+    if "LATEX_ANSWERS_START" in text and "LATEX_ANSWERS_END" not in text:
+        text += "\n===LATEX_ANSWERS_END==="
+    return text
+
 _RETRYABLE_MARKERS = (
     "503", "500", "429", "404", "400", "unavailable", "overloaded",
     "internal", "resource_exhausted", "not found", "empty text",
@@ -1884,17 +1934,20 @@ def audit_exam_with_deepseek(
     syllabus_rules: str,
     api_key: str = "",
     uploaded_doc_text: str = "",
+    thinking_type: str = "enabled",
+    reasoning_effort: str = "low",
 ) -> dict:
-    """Invokes DeepSeek-R1 (deepseek-reasoner) to audit drafted questions for mathematical correctness,
-    solvability, and strict post-2019 NESA syllabus boundaries.
+    """Invokes DeepSeek (deepseek-flash with tuned reasoning, falling back to deepseek-reasoner)
+    to audit drafted questions for mathematical correctness, solvability, and NESA syllabus compliance.
 
     Returns a dict with:
       status: "APPROVED" | "REVISION_NEEDED" | "ERROR" | "SKIPPED"
       summary: short overview of findings
       details: full critique or approval notes
       correction_prompt: instructions for Gemini to patch flaws (or empty)
-      reasoning: DeepSeek-R1 internal chain-of-thought
+      reasoning: DeepSeek internal chain-of-thought
       auto_corrected: bool (set to True if Gemini repaired issues)
+      re_verified: bool (set to True when DeepSeek re-audited and approved the patched exam)
       error: error message if call failed
     """
     key = (api_key or _get_deepseek_api_key()).strip()
@@ -1906,8 +1959,11 @@ def audit_exam_with_deepseek(
             "correction_prompt": "",
             "reasoning": "",
             "auto_corrected": False,
+            "re_verified": False,
+            "ds_model_used": "deepseek-flash",
             "ds_in_tok": 0,
             "ds_out_tok": 0,
+            "ds_cache_hit_tok": 0,
             "ds_cost": 0.0,
         }
 
@@ -1943,7 +1999,7 @@ def audit_exam_with_deepseek(
         "===AUDIT_DETAILS===\n"
         "[Detailed breakdown: if APPROVED, confirm that calculations and boundaries were checked; if REVISION_NEEDED, cite specific question numbers and the exact mathematical error or syllabus violation]\n"
         "===CORRECTION_PROMPT===\n"
-        "[If REVISION_NEEDED: Give precise, actionable instructions to the drafting AI on which questions to replace or fix and how. If APPROVED, write NONE]\n"
+        "[If REVISION_NEEDED: Give precise, actionable instructions to the drafting AI on which questions to replace or fix and how. NEVER leave this empty when REVISION_NEEDED. If APPROVED, write NONE]\n"
     )
 
     uploaded_doc_block = ""
@@ -1967,83 +2023,126 @@ def audit_exam_with_deepseek(
     reasoning_content = ""
     ds_in_tok = 0
     ds_out_tok = 0
+    ds_cache_hit_tok = 0
+    ds_model_used = "deepseek-flash"
+    last_err = None
 
-    # Strategy 1: OpenAI SDK if installed
-    used_sdk = False
-    if HAS_OPENAI:
-        try:
-            client = OpenAI(api_key=key, base_url="https://api.deepseek.com")
-            response = client.chat.completions.create(
-                model="deepseek-reasoner",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_payload},
-                ],
-                max_tokens=4096,
-                timeout=60.0,
-            )
-            if response.choices:
-                choice = response.choices[0]
-                raw_content = choice.message.content or ""
-                reasoning_content = getattr(choice.message, "reasoning_content", "") or ""
-                used_sdk = True
-            if getattr(response, "usage", None):
-                ds_in_tok = getattr(response.usage, "prompt_tokens", 0) or 0
-                ds_out_tok = getattr(response.usage, "completion_tokens", 0) or 0
-        except Exception as e_sdk:
-            _log_error("OpenAI SDK DeepSeek Call Failed, falling back to HTTP", e_sdk)
+    ds_thinking = "disabled" if (thinking_type or "").lower() == "disabled" else "enabled"
+    ds_effort = reasoning_effort if reasoning_effort in ("low", "high", "max") else "low"
+    msgs = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_payload},
+    ]
 
-    # Strategy 2: Direct HTTP POST via urllib.request (zero external dependencies)
-    if not used_sdk or not raw_content:
-        try:
-            import urllib.request
-            data = {
-                "model": "deepseek-reasoner",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_payload},
-                ],
-                "max_tokens": 4096,
-            }
-            req = urllib.request.Request(
-                "https://api.deepseek.com/chat/completions",
-                data=json.dumps(data).encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {key}",
-                },
-            )
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                res_obj = json.loads(resp.read().decode("utf-8"))
-                if res_obj.get("choices"):
-                    msg = res_obj["choices"][0].get("message", {})
-                    raw_content = msg.get("content", "") or ""
-                    reasoning_content = msg.get("reasoning_content", "") or ""
-                if res_obj.get("usage"):
-                    ds_in_tok = res_obj["usage"].get("prompt_tokens", 0) or 0
-                    ds_out_tok = res_obj["usage"].get("completion_tokens", 0) or 0
-        except Exception as e_http:
-            _log_error("DeepSeek Auditor API Failure", e_http)
-            err_msg = str(e_http)
-            if "402" in err_msg or "Payment Required" in err_msg:
-                friendly_err = "DeepSeek API account balance is empty ($0.00). Please top up credits at platform.deepseek.com to re-enable automated math auditing."
-            elif "401" in err_msg or "Unauthorized" in err_msg:
-                friendly_err = "Invalid DeepSeek API key. Please check your API key in settings."
-            else:
-                friendly_err = f"Auditor connection issue ({err_msg}). The exam was still generated successfully."
+    for candidate_model in ("deepseek-flash", "deepseek-reasoner"):
+        use_flash_params = candidate_model == "deepseek-flash"
+        extra_body = {"thinking": {"type": ds_thinking}}
+        if ds_thinking == "enabled":
+            extra_body["reasoning_effort"] = ds_effort
 
-            return {
-                "status": "ERROR",
-                "summary": friendly_err,
-                "details": err_msg,
-                "correction_prompt": "",
-                "reasoning": "",
-                "auto_corrected": False,
-                "error": friendly_err,
-                "ds_in_tok": 0,
-                "ds_out_tok": 0,
-                "ds_cost": 0.0,
-            }
+        # Strategy 1: OpenAI SDK if installed
+        used_sdk = False
+        if HAS_OPENAI:
+            try:
+                client = OpenAI(api_key=key, base_url="https://api.deepseek.com")
+                sdk_kwargs = {
+                    "model": candidate_model,
+                    "messages": msgs,
+                    "max_tokens": 4096,
+                    "timeout": 60.0,
+                }
+                if use_flash_params:
+                    sdk_kwargs["extra_body"] = extra_body
+                response = client.chat.completions.create(**sdk_kwargs)
+                if response.choices:
+                    choice = response.choices[0]
+                    raw_content = choice.message.content or ""
+                    reasoning_content = getattr(choice.message, "reasoning_content", "") or ""
+                    used_sdk = bool(raw_content)
+                usage_obj = getattr(response, "usage", None)
+                if usage_obj:
+                    ds_in_tok = int(getattr(usage_obj, "prompt_tokens", 0) or 0)
+                    ds_out_tok = int(getattr(usage_obj, "completion_tokens", 0) or 0)
+                    hit_val = getattr(usage_obj, "prompt_cache_hit_tokens", None)
+                    if hit_val is None and getattr(usage_obj, "prompt_tokens_details", None):
+                        hit_val = getattr(usage_obj.prompt_tokens_details, "cached_tokens", 0)
+                    ds_cache_hit_tok = int(hit_val or 0)
+                if raw_content:
+                    ds_model_used = candidate_model
+                    break
+            except Exception as e_sdk:
+                last_err = e_sdk
+                _log_error(f"OpenAI SDK DeepSeek Call Failed ({candidate_model}), falling back", e_sdk)
+
+        # Strategy 2: Direct HTTP POST via urllib.request (zero external dependencies)
+        if not used_sdk or not raw_content:
+            try:
+                import urllib.request
+                data = {
+                    "model": candidate_model,
+                    "messages": msgs,
+                    "max_tokens": 4096,
+                }
+                if use_flash_params:
+                    data["thinking"] = {"type": ds_thinking}
+                    if ds_thinking == "enabled":
+                        data["reasoning_effort"] = ds_effort
+                req = urllib.request.Request(
+                    "https://api.deepseek.com/chat/completions",
+                    data=json.dumps(data).encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {key}",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    res_obj = json.loads(resp.read().decode("utf-8"))
+                    if res_obj.get("choices"):
+                        msg = res_obj["choices"][0].get("message", {})
+                        raw_content = msg.get("content", "") or ""
+                        reasoning_content = msg.get("reasoning_content", "") or ""
+                    if res_obj.get("usage"):
+                        u = res_obj["usage"]
+                        ds_in_tok = int(u.get("prompt_tokens", 0) or 0)
+                        ds_out_tok = int(u.get("completion_tokens", 0) or 0)
+                        hit_val = u.get("prompt_cache_hit_tokens")
+                        if hit_val is None and isinstance(u.get("prompt_tokens_details"), dict):
+                            hit_val = u["prompt_tokens_details"].get("cached_tokens", 0)
+                        ds_cache_hit_tok = int(hit_val or 0)
+                if raw_content:
+                    ds_model_used = candidate_model
+                    break
+            except Exception as e_http:
+                last_err = e_http
+                _log_error(f"DeepSeek Auditor API Failure ({candidate_model})", e_http)
+                err_low = str(e_http).lower()
+                if "402" in err_low or "payment required" in err_low or "401" in err_low or "unauthorized" in err_low:
+                    break
+                continue
+
+    if not raw_content:
+        err_msg = str(last_err or "Empty response from DeepSeek")
+        if "402" in err_msg or "Payment Required" in err_msg:
+            friendly_err = "DeepSeek API account balance is empty ($0.00). Please top up credits at platform.deepseek.com to re-enable automated math auditing."
+        elif "401" in err_msg or "Unauthorized" in err_msg:
+            friendly_err = "Invalid DeepSeek API key. Please check your API key in settings."
+        else:
+            friendly_err = f"Auditor connection issue ({err_msg}). The exam was still generated successfully."
+
+        return {
+            "status": "ERROR",
+            "summary": friendly_err,
+            "details": err_msg,
+            "correction_prompt": "",
+            "reasoning": "",
+            "auto_corrected": False,
+            "re_verified": False,
+            "ds_model_used": ds_model_used,
+            "ds_in_tok": 0,
+            "ds_out_tok": 0,
+            "ds_cache_hit_tok": 0,
+            "ds_cost": 0.0,
+        }
 
     # Parse delimited response
     status_m = re.search(r"===?\s*AUDIT_STATUS\s*===?\s*(APPROVED|REVISION_NEEDED)", raw_content, re.IGNORECASE)
@@ -2060,8 +2159,20 @@ def audit_exam_with_deepseek(
     if corr_prompt.upper() in ["NONE", "N/A", "NONE."]:
         corr_prompt = ""
 
-    # DeepSeek-R1 (deepseek-reasoner) pricing: $0.55 / 1M input, $2.19 / 1M output (including reasoning tokens)
-    ds_cost = round(((ds_in_tok / 1_000_000) * 0.55) + ((ds_out_tok / 1_000_000) * 2.19), 6)
+    # Synthesize actionable correction instructions if REVISION_NEEDED omitted CORRECTION_PROMPT
+    if status == "REVISION_NEEDED" and not corr_prompt:
+        fallback_issue = details or (summary if summary != "Auditor review completed." else "") or raw_content[:2000].strip()
+        if fallback_issue:
+            corr_prompt = f"Resolve every mathematical, syllabus, or scope issue identified in this audit:\n{fallback_issue}"
+
+    is_peak = _is_deepseek_peak_utc()
+    ds_cost = _compute_deepseek_cost(
+        ds_in_tok,
+        ds_out_tok,
+        cache_hit_tok=ds_cache_hit_tok,
+        model_name=ds_model_used,
+        is_peak=is_peak,
+    )
 
     return {
         "status": status,
@@ -2070,10 +2181,119 @@ def audit_exam_with_deepseek(
         "correction_prompt": corr_prompt,
         "reasoning": reasoning_content,
         "auto_corrected": False,
+        "re_verified": False,
+        "ds_model_used": ds_model_used,
+        "is_peak": is_peak,
         "ds_in_tok": ds_in_tok,
         "ds_out_tok": ds_out_tok,
+        "ds_cache_hit_tok": ds_cache_hit_tok,
         "ds_cost": ds_cost,
     }
+
+
+def _apply_gemini_audit_fix(
+    client,
+    current_out: str,
+    audit_info: dict,
+    *,
+    solutions_context_prompt: str,
+    uploaded_doc_text: str,
+    syllabus_ban: str,
+    refine_models: list[str],
+    refine_thinking: str,
+    total_q: int,
+    _stopped,
+) -> tuple[str | None, tuple[int, int, int, int]]:
+    """Run Gemini to fix audit-flagged flaws with validation, tag normalization, and repair retry."""
+    eval_notes = (audit_info.get("details") or audit_info.get("summary") or "").strip()
+    corr_instr = (audit_info.get("correction_prompt") or "").strip()
+    if not corr_instr:
+        corr_instr = eval_notes or "Fix every mathematical, syllabus, or scope violation in the drafted questions and answers."
+
+    refine_prompt = (
+        "You previously drafted an exam, but our Chief Mathematical Auditor reviewed it and detected the following critical issues:\n\n"
+        f"AUDITOR'S EVALUATION:\n{eval_notes}\n\n"
+        f"AUDITOR'S SPECIFIC CORRECTION INSTRUCTIONS:\n{corr_instr}\n\n"
+        "CRITICAL TASK:\n"
+        "Regenerate the complete exam, applying the auditor's corrections.\n"
+        "Keep all already-correct questions untouched, and strictly replace or fix the flagged questions to ensure 100% mathematical accuracy, strict syllabus compliance, and strict compliance with the teacher's requested topics, subtopics, and any uploaded assessment notification.\n"
+        f"REQUESTED SCOPE AND SYLLABUS RULES:\n{syllabus_ban}\n"
+        "Output using the exact same format tags:\n"
+        "===FILENAME_START=== ... ===FILENAME_END===\n"
+        "===LATEX_CONTENT_START=== ... ===LATEX_CONTENT_END===\n"
+        "===LATEX_ANSWERS_START=== ... ===LATEX_ANSWERS_END===\n"
+    )
+    refine_contents = [solutions_context_prompt]
+    if uploaded_doc_text:
+        refine_contents.append(
+            "\n\nUPLOADED ASSESSMENT NOTIFICATION / REFERENCE DOCUMENT TEXT (STRICT SCOPE):\n"
+            + uploaded_doc_text[:8000]
+        )
+    refine_contents.extend([
+        "\n\nCURRENT EXAM DRAFT TO FIX:\n" + current_out,
+        "\n\n" + refine_prompt,
+    ])
+
+    tot_in = tot_out = tot_th = tot_ca = 0
+    for attempt in range(2):
+        for r_model in refine_models:
+            if _stopped():
+                return None, (tot_in, tot_out, tot_th, tot_ca)
+            try:
+                ref_cfg = _build_gen_config(
+                    r_model,
+                    max_output_tokens=MAX_OUTPUT_TOKENS,
+                    tools=None,
+                    thinking_level=refine_thinking,
+                )
+                res_refined = client.models.generate_content(
+                    model=r_model,
+                    contents=refine_contents,
+                    config=ref_cfg,
+                )
+                if _stopped():
+                    return None, (tot_in, tot_out, tot_th, tot_ca)
+                rf_in, rf_out, rf_th, rf_ca = _extract_usage_tokens(res_refined)
+                tot_in += rf_in
+                tot_out += rf_out
+                tot_th += rf_th
+                tot_ca += rf_ca
+
+                raw_ref = _normalize_exam_tags(_extract_genai_text(res_refined))
+                issue = _exam_draft_issue(raw_ref)
+                if issue:
+                    rep_cfg = _build_gen_config(
+                        r_model,
+                        max_output_tokens=MAX_OUTPUT_TOKENS,
+                        tools=None,
+                        thinking_level="low",
+                    )
+                    repaired = _request_exam_draft_repair(
+                        client, r_model, refine_contents, rep_cfg, raw_ref, issue, total_q
+                    )
+                    if _stopped():
+                        return None, (tot_in, tot_out, tot_th, tot_ca)
+                    rp_in, rp_out, rp_th, rp_ca = _extract_usage_tokens(repaired)
+                    tot_in += rp_in
+                    tot_out += rp_out
+                    tot_th += rp_th
+                    tot_ca += rp_ca
+                    raw_ref = _normalize_exam_tags(_extract_genai_text(repaired))
+                    issue = _exam_draft_issue(raw_ref)
+                if not issue:
+                    return raw_ref, (tot_in, tot_out, tot_th, tot_ca)
+            except Exception as e_ref:
+                if _stopped():
+                    return None, (tot_in, tot_out, tot_th, tot_ca)
+                if _is_retryable(e_ref):
+                    if cancel_event_ref := getattr(client, "_cancel_event", None):
+                        cancel_event_ref.wait(1.0)
+                    else:
+                        time.sleep(1.0)
+                continue
+        if attempt == 0:
+            time.sleep(1.0)
+    return None, (tot_in, tot_out, tot_th, tot_ca)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2638,91 +2858,126 @@ When instructed, your final combined output must follow this template structure 
         if not out:
             raise (last_error or Exception("Failed to generate content after multiple attempts."))
 
-        # DeepSeek-R1 Quality Audit
+        # DeepSeek-Flash Quality Audit with bounded Fix -> Re-Audit verification loop
         audit_res = None
         if use_deepseek_auditor:
             if _stopped():
                 return _cancelled_result()
             active_ds_key = (deepseek_api_key or _get_deepseek_api_key()).strip()
             if active_ds_key:
-                _notify("🛡️ DeepSeek-R1: Auditing math solvability & syllabus compliance...")
-                audit_res = audit_exam_with_deepseek(
-                    draft_content=out,
-                    subject=subject,
-                    year_group=grades_string,
-                    actual_level=actual_level,
-                    clean_topic=clean_topic,
-                    total_q=total_q,
-                    syllabus_rules=syllabus_ban,
-                    api_key=active_ds_key,
-                    uploaded_doc_text=uploaded_doc_text,
-                )
+                if not is_stem:
+                    ds_thinking_type, ds_effort = "disabled", "low"
+                elif "Maximum" in efficiency_mode or has_hard_items:
+                    ds_thinking_type, ds_effort = "enabled", "high"
+                else:
+                    ds_thinking_type, ds_effort = "enabled", "low"
+
+                def _run_ds_audit(draft_text: str, msg: str) -> dict:
+                    _notify(msg)
+                    return audit_exam_with_deepseek(
+                        draft_content=draft_text,
+                        subject=subject,
+                        year_group=grades_string,
+                        actual_level=actual_level,
+                        clean_topic=clean_topic,
+                        total_q=total_q,
+                        syllabus_rules=syllabus_ban,
+                        api_key=active_ds_key,
+                        uploaded_doc_text=uploaded_doc_text,
+                        thinking_type=ds_thinking_type,
+                        reasoning_effort=ds_effort,
+                    )
+
+                audit_res = _run_ds_audit(out, "🛡️ DeepSeek: Auditing math solvability & syllabus compliance...")
                 if _stopped():
                     return _cancelled_result()
-                if audit_res.get("status") == "REVISION_NEEDED" and audit_res.get("correction_prompt"):
-                    _notify("⚡ Gemini: Auto-correcting questions based on DeepSeek audit...")
-                    refine_prompt = (
-                        "You previously drafted an exam, but our Chief Mathematical Auditor (DeepSeek-R1) reviewed it and detected the following critical issues:\n\n"
-                        f"AUDITOR'S EVALUATION:\n{audit_res.get('details') or audit_res.get('summary')}\n\n"
-                        f"AUDITOR'S SPECIFIC CORRECTION INSTRUCTIONS:\n{audit_res.get('correction_prompt')}\n\n"
-                        "CRITICAL TASK:\n"
-                        "Regenerate the complete exam, applying the auditor's corrections.\n"
-                        "Keep all already-correct questions untouched, and strictly replace or fix the flagged questions to ensure 100% mathematical accuracy, strict syllabus compliance, and strict compliance with the teacher's requested topics, subtopics, and any uploaded assessment notification.\n"
-                        f"REQUESTED SCOPE AND SYLLABUS RULES:\n{syllabus_ban}\n"
-                        "Output using the exact same format tags:\n"
-                        "===FILENAME_START=== ... ===FILENAME_END===\n"
-                        "===LATEX_CONTENT_START=== ... ===LATEX_CONTENT_END===\n"
-                        "===LATEX_ANSWERS_START=== ... ===LATEX_ANSWERS_END===\n"
-                    )
-                    refine_contents = [solutions_context_prompt]
-                    if uploaded_doc_text:
-                        refine_contents.append(
-                            "\n\nUPLOADED ASSESSMENT NOTIFICATION / REFERENCE DOCUMENT TEXT (STRICT SCOPE):\n"
-                            + uploaded_doc_text[:8000]
-                        )
-                    refine_contents.extend([
-                        "\n\nCURRENT EXAM DRAFT TO FIX:\n" + out,
-                        "\n\n" + refine_prompt,
-                    ])
+
+                if audit_res.get("status") == "REVISION_NEEDED":
+                    cum_ds_in = int(audit_res.get("ds_in_tok") or 0)
+                    cum_ds_out = int(audit_res.get("ds_out_tok") or 0)
+                    cum_ds_hit = int(audit_res.get("ds_cache_hit_tok") or 0)
+                    cum_ds_cost = float(audit_res.get("ds_cost") or 0.0)
+                    first_summary = audit_res.get("summary") or ""
+                    first_details = audit_res.get("details") or ""
+                    first_corr = audit_res.get("correction_prompt") or ""
+                    first_reasoning = audit_res.get("reasoning") or ""
                     refine_models = _get_models_for_mode(efficiency_mode)
-                    for r_model in refine_models:
+                    max_fix_rounds = 2
+                    current_audit = audit_res
+                    applied_any_fix = False
+                    verified_clean = False
+
+                    for fix_round in range(max_fix_rounds):
+                        _notify(f"⚡ Gemini: Auto-correcting flagged issues (pass {fix_round + 1}/{max_fix_rounds})...")
+                        fixed_out, (rf_in, rf_out, rf_th, rf_ca) = _apply_gemini_audit_fix(
+                            client,
+                            out,
+                            current_audit,
+                            solutions_context_prompt=solutions_context_prompt,
+                            uploaded_doc_text=uploaded_doc_text,
+                            syllabus_ban=syllabus_ban,
+                            refine_models=refine_models,
+                            refine_thinking=refine_thinking,
+                            total_q=total_q,
+                            _stopped=_stopped,
+                        )
+                        in_tok += rf_in
+                        out_tok += rf_out
+                        thought_tok += rf_th
+                        cached_tok += rf_ca
                         if _stopped():
                             return _cancelled_result()
-                        try:
-                            ref_cfg = _build_gen_config(
-                                r_model,
-                                max_output_tokens=MAX_OUTPUT_TOKENS,
-                                tools=None,
-                                thinking_level=refine_thinking,
-                            )
-                            res_refined = client.models.generate_content(
-                                model=r_model,
-                                contents=refine_contents,
-                                config=ref_cfg,
-                            )
-                            if _stopped():
-                                return _cancelled_result()
-                            raw_ref = _extract_genai_text(res_refined)
-                            if raw_ref and "LATEX_CONTENT_START" in raw_ref:
-                                if "LATEX_CONTENT_END" not in raw_ref:
-                                    if "LATEX_ANSWERS_START" in raw_ref:
-                                        raw_ref = raw_ref.replace("===LATEX_ANSWERS_START===", "===LATEX_CONTENT_END===\n===LATEX_ANSWERS_START===")
-                                    else:
-                                        raw_ref += "\n===LATEX_CONTENT_END===\n===LATEX_ANSWERS_START===\n===LATEX_ANSWERS_END==="
-                                if "LATEX_ANSWERS_START" in raw_ref and "LATEX_ANSWERS_END" not in raw_ref:
-                                    raw_ref += "\n===LATEX_ANSWERS_END==="
-                                out = raw_ref.replace("```latex", "").replace("```", "")
-                                audit_res["auto_corrected"] = True
-                                rf_in, rf_out, rf_th, rf_ca = _extract_usage_tokens(res_refined)
-                                in_tok += rf_in
-                                out_tok += rf_out
-                                thought_tok += rf_th
-                                cached_tok += rf_ca
-                                break
-                        except Exception:
-                            if _stopped():
-                                return _cancelled_result()
-                            continue
+                        if not fixed_out:
+                            break
+
+                        out = fixed_out
+                        applied_any_fix = True
+
+                        # Re-audit the patched exam to verify the fix actually solved the flaws
+                        re_audit = _run_ds_audit(out, f"🛡️ DeepSeek: Re-auditing patched exam (pass {fix_round + 1})...")
+                        if _stopped():
+                            return _cancelled_result()
+
+                        cum_ds_in += int(re_audit.get("ds_in_tok") or 0)
+                        cum_ds_out += int(re_audit.get("ds_out_tok") or 0)
+                        cum_ds_hit += int(re_audit.get("ds_cache_hit_tok") or 0)
+                        cum_ds_cost += float(re_audit.get("ds_cost") or 0.0)
+
+                        if re_audit.get("status") == "APPROVED":
+                            verified_clean = True
+                            break
+                        if re_audit.get("status") == "ERROR":
+                            # Keep the applied fix rather than discarding it on a transient re-audit error
+                            break
+                        current_audit = re_audit
+
+                    audit_res["ds_in_tok"] = cum_ds_in
+                    audit_res["ds_out_tok"] = cum_ds_out
+                    audit_res["ds_cache_hit_tok"] = cum_ds_hit
+                    audit_res["ds_cost"] = round(cum_ds_cost, 6)
+                    audit_res["summary"] = first_summary
+                    audit_res["details"] = first_details
+                    audit_res["correction_prompt"] = first_corr
+                    audit_res["reasoning"] = first_reasoning
+
+                    if applied_any_fix and verified_clean:
+                        audit_res["auto_corrected"] = True
+                        audit_res["re_verified"] = True
+                    elif applied_any_fix and current_audit is not audit_res and current_audit.get("status") == "REVISION_NEEDED":
+                        # Still flagged after max_fix_rounds -> warn teacher honestly with remaining critique
+                        audit_res["auto_corrected"] = False
+                        audit_res["re_verified"] = False
+                        rem_issue = (current_audit.get("details") or current_audit.get("summary") or "").strip()
+                        if rem_issue:
+                            audit_res["summary"] = f"Initial issues were patched, but re-audit flagged remaining item(s): {current_audit.get('summary') or ''}"
+                            audit_res["details"] = f"**Original Flaws:**\n{first_details}\n\n**Remaining After Auto-Fix:**\n{rem_issue}"
+                    elif applied_any_fix:
+                        audit_res["auto_corrected"] = True
+                        audit_res["re_verified"] = False
+                    else:
+                        audit_res["auto_corrected"] = False
+                        audit_res["re_verified"] = False
+                        audit_res["summary"] = f"Auto-correction failed after retries — please review manually. {first_summary}".strip()
 
             else:
                 audit_res = {
@@ -3223,17 +3478,24 @@ def render_exam_queue_dashboard():
         badges.append(f"{n_done} Ready")
     summary_str = " · ".join(badges) if badges else f"{len(valid_jobs)} Exams"
 
+    def _is_job_saved(j: dict) -> bool:
+        return bool(j.get("saved_to_cloud") or (j.get("result") or {}).get("cloud_saved"))
+
     unsaved_jobs = [
         j for j in done_jobs
-        if j.get("status") == "COMPLETED" and not j.get("saved_to_cloud") and j.get("result")
+        if j.get("status") == "COMPLETED" and not _is_job_saved(j) and j.get("result")
+    ]
+    saved_jobs = [
+        j for j in done_jobs
+        if j.get("status") == "COMPLETED" and _is_job_saved(j)
     ]
 
-    q_head_c1, q_head_c2, q_head_c3, q_head_c4 = st.columns([3, 1.3, 1.1, 1.1], vertical_alignment="center")
+    q_head_c1, q_head_c2, q_head_c3, q_head_c4, q_head_c5 = st.columns([2.5, 1.3, 1.05, 1.4, 1.2], vertical_alignment="center")
     with q_head_c1:
         st.markdown(f"### 📋 Active Exam Generation Queue ({summary_str})")
     with q_head_c2:
         save_all_btn_text = f"💾 Save All ({len(unsaved_jobs)})" if unsaved_jobs else "💾 Save All"
-        if st.button(save_all_btn_text, key="btn_save_all_q", type="primary" if unsaved_jobs else "secondary", disabled=(len(unsaved_jobs) == 0), help="Save all completed exams in the queue to Cloud Library"):
+        if st.button(save_all_btn_text, key="btn_save_all_q", type="primary" if unsaved_jobs else "secondary", disabled=(len(unsaved_jobs) == 0), use_container_width=True, help="Save all completed exams in the queue to Cloud Library"):
             success_count = 0
             err_count = 0
             with st.spinner(f"Saving {len(unsaved_jobs)} exam(s) to Cloud Library..."):
@@ -3249,10 +3511,18 @@ def render_exam_queue_dashboard():
                 st.warning(f"⚠️ {err_count} exam(s) failed to save.")
             st.rerun()
     with q_head_c3:
-        if st.button("🔄 Refresh Status", key="btn_refresh_q", help="Refresh progress of background jobs"):
+        if st.button("🔄 Refresh", key="btn_refresh_q", use_container_width=True, help="Refresh progress of background jobs"):
             st.rerun()
     with q_head_c4:
-        if st.button("🗑️ Clear Done", key="btn_clear_done_q", help="Clear completed, failed, or stopped jobs from this list"):
+        clear_saved_btn_text = f"🧹 Clear Saved ({len(saved_jobs)})" if saved_jobs else "🧹 Clear Saved"
+        if st.button(clear_saved_btn_text, key="btn_clear_saved_q", disabled=(len(saved_jobs) == 0), use_container_width=True, help="Remove completed exams that have already been saved to Cloud Library"):
+            with GLOBAL_QUEUE_LOCK:
+                for j in saved_jobs:
+                    if j["id"] in GLOBAL_JOB_QUEUE:
+                        del GLOBAL_JOB_QUEUE[j["id"]]
+            st.rerun()
+    with q_head_c5:
+        if st.button("🗑️ Clear Done", key="btn_clear_done_q", use_container_width=True, help="Clear completed, failed, or stopped jobs from this list"):
             with GLOBAL_QUEUE_LOCK:
                 for j in done_jobs:
                     if j["id"] in GLOBAL_JOB_QUEUE:
@@ -4073,12 +4343,12 @@ with st.sidebar:
             ),
         )
         use_deepseek_auditor = st.checkbox(
-            "🛡️ DeepSeek-R1 Quality Auditor",
+            "🛡️ DeepSeek Quality Auditor",
             value=True,
-            help="Uses DeepSeek-R1 (deepseek-reasoner) to audit questions and answers for mathematical correctness, solvability, and NESA syllabus compliance before finalizing.",
+            help="Uses DeepSeek (`deepseek-flash` with tuned reasoning) to audit questions and answers for mathematical correctness, solvability, and NESA syllabus compliance, auto-corrects flaws, and re-verifies the fix.",
         )
         with st.expander("🛡️ Auditor Settings", expanded=False):
-            st.caption("DeepSeek-R1 independently verifies questions and auto-instructs Gemini if corrections are required.")
+            st.caption("DeepSeek independently verifies questions, instructs Gemini on any fixes needed, and re-audits patched exams.")
             _saved_ds_key = st.session_state.get("deepseek_api_key", "")
             ds_key_input = st.text_input(
                 "DeepSeek API Key",
@@ -4092,7 +4362,7 @@ with st.sidebar:
                 st.session_state["deepseek_api_key"] = ds_key_input.strip()
             _active_k = _get_deepseek_api_key()
             if _active_k:
-                st.caption(f"Key configured: `{_mask_api_key(_active_k)}` · Model: `deepseek-reasoner`")
+                st.caption(f"Key configured: `{_mask_api_key(_active_k)}` · Model: `deepseek-flash`")
             else:
                 st.caption("⚠️ No DeepSeek key connected.")
         use_live_search = st.checkbox("🌍 Enable Live Web Search", value=False)
@@ -5325,36 +5595,47 @@ if st.session_state.questions_text:
             st.session_state.cloud_saved = False
             st.rerun()
 
-    # ── DEEPSEEK-R1 AUDITOR STATUS CARD ─────────────────────────────────────────
+    # ── DEEPSEEK AUDITOR STATUS CARD ──────────────────────────────────────────
     audit_info = st.session_state.get("deepseek_audit")
     if audit_info and isinstance(audit_info, dict):
         status = audit_info.get("status")
         auto_corr = audit_info.get("auto_corrected", False)
+        re_verified = audit_info.get("re_verified", False)
         summary = audit_info.get("summary", "")
         details = audit_info.get("details", "")
         reasoning = audit_info.get("reasoning", "")
 
         if status == "APPROVED":
-            with st.expander("🛡️ **DeepSeek-R1 Quality Audit:** Verified & Approved (100% Syllabus & Math Sound)", expanded=False):
+            with st.expander("🛡️ **DeepSeek Quality Audit:** Verified & Approved (100% Syllabus & Math Sound)", expanded=False):
                 st.success(f"✅ **Mathematical Solvability & NESA Boundaries Verified**\n\n{summary}")
                 if details:
                     st.markdown(f"**Verification Breakdown:**\n\n{details}")
                 if reasoning:
-                    with st.expander("🧠 View DeepSeek-R1 Chain-of-Thought Reasoning", expanded=False):
+                    with st.expander("🧠 View DeepSeek Reasoning", expanded=False):
                         st.caption(reasoning)
         elif status == "REVISION_NEEDED" and auto_corr:
-            with st.expander("🛡️ **DeepSeek-R1 Quality Audit:** Flaws Flagged & Auto-Corrected by Gemini", expanded=True):
-                st.info(f"🔄 **DeepSeek-R1 identified mathematical or syllabus issues in the initial draft, and Gemini automatically repaired them before finalizing:**\n\n{summary}")
+            badge_title = (
+                "🛡️ **DeepSeek Quality Audit:** Flaws Flagged, Auto-Corrected & Re-Verified ✅"
+                if re_verified
+                else "🛡️ **DeepSeek Quality Audit:** Flaws Flagged & Auto-Corrected by Gemini"
+            )
+            body_prefix = (
+                "DeepSeek identified issues in the initial draft, Gemini repaired them, and DeepSeek re-audited and approved the final exam"
+                if re_verified
+                else "DeepSeek identified mathematical or syllabus issues in the initial draft, and Gemini automatically repaired them before finalizing"
+            )
+            with st.expander(badge_title, expanded=True):
+                st.info(f"🔄 **{body_prefix}:**\n\n{summary}")
                 if details:
                     st.markdown(f"**Issues Identified by Auditor:**\n\n{details}")
                 if audit_info.get("correction_prompt"):
                     st.caption(f"**Correction Applied:** {audit_info['correction_prompt']}")
                 if reasoning:
-                    with st.expander("🧠 View DeepSeek-R1 Chain-of-Thought Reasoning", expanded=False):
+                    with st.expander("🧠 View DeepSeek Reasoning", expanded=False):
                         st.caption(reasoning)
         elif status == "REVISION_NEEDED" and not auto_corr:
-            with st.expander("🛡️ **DeepSeek-R1 Quality Audit:** Revision Recommended", expanded=True):
-                st.warning(f"⚠️ **DeepSeek-R1 noted potential issues:**\n\n{summary}")
+            with st.expander("🛡️ **DeepSeek Quality Audit:** Revision Recommended", expanded=True):
+                st.warning(f"⚠️ **DeepSeek noted potential issues:**\n\n{summary}")
                 if details:
                     st.markdown(details)
         elif status == "ERROR":
@@ -5377,12 +5658,18 @@ if st.session_state.questions_text:
 
     if st.session_state.get("admin_pin") == "DA_ADMIN":
         search_badge = " &nbsp;&nbsp;|&nbsp;&nbsp; 🌍 *Live Web Search*" if st.session_state.used_search else ""
-        audit_status = (st.session_state.get("deepseek_audit") or {}).get("status")
+        audit_dict = st.session_state.get("deepseek_audit") or {}
+        audit_status = audit_dict.get("status")
+        ds_model = (audit_dict.get("ds_model_used") or "deepseek-flash").lower()
+        ds_peak = audit_dict.get("is_peak")
+        ds_rates = DEEPSEEK_MODEL_PRICING.get(ds_model, DEEPSEEK_MODEL_PRICING["deepseek-flash"])
+        ds_in_r, _, ds_out_r = ds_rates[3:6] if ds_peak else ds_rates[0:3]
+        ds_window = "peak" if ds_peak else "off-peak"
         split_info = f" (🤖 Gemini: ${gemini_cost:.4f} &nbsp;|&nbsp; 🛡️ DeepSeek Auditor: {deepseek_cost_label(ds_cost, audit_status)})"
         th_info = f" incl. {thought_tok:,} thinking" if thought_tok else ""
         in_rate, _, out_rate = GEMINI_MODEL_PRICING.get(model_used.lower(), GEMINI_MODEL_PRICING["gemini-3.8-flash"])
         st.caption(f"**💸 Generation Cost:** ${total_cost:.5f}{split_info} &nbsp;&nbsp;|&nbsp;&nbsp; **Engine:** `{model_used}` &nbsp;&nbsp;|&nbsp;&nbsp; **Tokens:** {in_tok:,} In / {out_tok:,} Out{th_info}{search_badge}")
-        st.caption(f"ℹ️ Reflects `{model_used}` rates (${in_rate:.2f}/1M in, ${out_rate:.2f}/1M out incl. thinking) + DeepSeek-R1 auditor rates ($0.55/1M in, $2.19/1M out).")
+        st.caption(f"ℹ️ Reflects `{model_used}` (${in_rate:.2f}/1M in, ${out_rate:.2f}/1M out incl. thinking) + `{ds_model}` ({ds_window}: ${ds_in_r:.2f}/1M in, ${ds_out_r:.2f}/1M out).")
 
     if not st.session_state.solutions_text:
         st.info("💡 **Preview Ready!** The Worksheet and Answer Key have been drafted. You can download them now, or generate the step-by-step solutions to append to the document.")
